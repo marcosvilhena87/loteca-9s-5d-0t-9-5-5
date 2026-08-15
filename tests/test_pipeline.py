@@ -2,7 +2,7 @@ import unittest
 
 from scripts.common import rank_results, rank_scale, top1_risk_scale
 from scripts.predict_results import hit_distribution, optimize, validate_ticket
-from scripts.train_model import _validated_temperature
+from scripts.train_model import _risk_rank_analysis, _validated_temperature
 
 
 class PipelineTests(unittest.TestCase):
@@ -34,6 +34,24 @@ class PipelineTests(unittest.TestCase):
         self.assertAlmostEqual(calibrated["X"] / calibrated["2"], 1.5)
         self.assertLess(calibrated["1"], 0.5)
 
+    def test_risk_rank_analysis_reports_confidence_and_wilson_interval(self):
+        rows = []
+        for contest in range(1, 61):
+            for game in range(1, 15):
+                rows.append({
+                    "Concurso": str(contest), "Jogo": str(game),
+                    "Mandante": f"TIME {game} A", "Visitante": f"TIME {game} B",
+                    "p(1)": f"0,{50 + game:02d}", "p(x)": "0,25", "p(2)": f"0,{25 - game:02d}",
+                    "1": "1", "X": "0", "2": "0",
+                })
+        audit = _risk_rank_analysis(rows, 1.0, [1.0, 1.0, 1.0])
+        self.assertEqual(len(audit), 14)
+        self.assertEqual(audit[0]["n_jogos"], 60)
+        self.assertLessEqual(audit[0]["ic95_hit_low"], audit[0]["Top1_hit_observado"])
+        self.assertGreaterEqual(audit[0]["ic95_hit_high"], audit[0]["Top1_hit_observado"])
+        self.assertIn("50", audit[0]["window_hit_rates"])
+        self.assertIn(audit[0]["confidence_label"], ("LOW", "MEDIUM", "HIGH"))
+
     def test_optimizer_enforces_all_hard_constraints(self):
         rows = []
         for game in range(1, 15):
@@ -49,6 +67,8 @@ class PipelineTests(unittest.TestCase):
         for rank, expected in ((1, 9), (2, 5), (3, 5)):
             self.assertEqual(sum(f"top{rank}" in item["ranks_selecionados"].split("+") for item in predictions), expected)
         self.assertIn("1", predictions[0]["palpite"])
+        self.assertIn("pTop1_base", predictions[0])
+        self.assertIn("ranking_mudou", predictions[0])
         distribution = hit_distribution([item["probabilidade_coberta"] for item in predictions])
         self.assertAlmostEqual(probability, sum(distribution[13:]))
 

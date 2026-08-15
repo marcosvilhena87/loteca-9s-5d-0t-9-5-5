@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import json
 import math
+import statistics
 from pathlib import Path
 
 from scripts.common import actual_result, log_loss, probabilities, rank_results, rank_scale, read_loteca_csv, temperature_scale, top1_risk_scale
@@ -14,6 +15,7 @@ TEMPERATURES = tuple(value / 100 for value in range(50, 201))
 MIN_VALIDATION_GAIN = 1e-6
 RANK_PRIOR_GAMES = 20.0
 RISK_PRIOR_GAMES = 30.0
+RISK_STABILITY_WINDOWS = (50, 100, 200)
 
 
 def _best_temperature(rows: list[dict[str, str]]) -> float:
@@ -58,11 +60,11 @@ def _calibrated_log_loss(rows: list[dict[str, str]], temperature: float, lifts: 
     return loss / len(rows)
 
 
-def _risk_rank_lifts(rows: list[dict[str, str]], temperature: float, rank_lifts: list[float]) -> list[float]:
-    """Learn smoothed Top1 calibration by within-contest risk rank 1..14."""
-    predicted = [0.0] * 14
-    hits = [0.0] * 14
-    counts = [0] * 14
+def _risk_rank_observations(
+    rows: list[dict[str, str]], temperature: float, rank_lifts: list[float]
+) -> list[list[tuple[int, float, int]]]:
+    """Return (contest, predicted Top1, hit) observations for each risk rank."""
+    observations: list[list[tuple[int, float, int]]] = [[] for _ in range(14)]
     contests: dict[int, list[dict[str, str]]] = {}
     for row in rows:
         contests.setdefault(int(row["Concurso"]), []).append(row)
@@ -73,19 +75,55 @@ def _risk_rank_lifts(rows: list[dict[str, str]], temperature: float, rank_lifts:
             prepared.append((row, probs, probs[rank_results(probs)[0]]))
         for index, (row, probs, _) in enumerate(sorted(prepared, key=lambda item: (item[2], int(item[0]["Jogo"])))):
             top1 = rank_results(probs)[0]
-            predicted[index] += probs[top1]
-            hits[index] += actual_result(row) == top1
-            counts[index] += 1
-    lifts = []
-    for index in range(14):
-        if not counts[index] or predicted[index] <= 0:
-            lifts.append(1.0)
+            observations[index].append((int(row["Concurso"]), probs[top1], int(actual_result(row) == top1)))
+    return observations
+
+
+def _risk_rank_analysis(rows: list[dict[str, str]], temperature: float, rank_lifts: list[float]) -> list[dict]:
+    """Audit risk-rank signal and shrink noisy/temporally unstable estimates."""
+    analysis = []
+    for index, values in enumerate(_risk_rank_observations(rows, temperature, rank_lifts)):
+        count = len(values)
+        if not count:
+            analysis.append({"risk_rank": index + 1, "n_jogos": 0, "lift_shrunk": 1.0, "historical_confidence": 0.0})
             continue
-        mean_predicted = predicted[index] / counts[index]
-        smoothed_hits = hits[index] + RISK_PRIOR_GAMES * mean_predicted
-        smoothed_predicted = predicted[index] + RISK_PRIOR_GAMES * mean_predicted
-        lifts.append(smoothed_hits / smoothed_predicted)
-    return lifts
+        predicted = sum(value[1] for value in values)
+        hits = sum(value[2] for value in values)
+        mean_predicted = predicted / count
+        hit_rate = hits / count
+        # Wilson interval remains meaningful even for small samples.
+        z = 1.959963984540054
+        denominator = 1.0 + z * z / count
+        centre = (hit_rate + z * z / (2 * count)) / denominator
+        radius = z * math.sqrt(hit_rate * (1 - hit_rate) / count + z * z / (4 * count * count)) / denominator
+        ordered = sorted(values)
+        window_rates = {
+            str(window): sum(value[2] for value in ordered[-window:]) / min(window, count)
+            for window in RISK_STABILITY_WINDOWS if count >= window
+        }
+        window_rates["all"] = hit_rate
+        dispersion = statistics.pstdev(window_rates.values()) if len(window_rates) > 1 else 0.0
+        stability = max(0.0, 1.0 - dispersion / 0.10)
+        sample_strength = count / (count + RISK_PRIOR_GAMES)
+        confidence = sample_strength * stability
+        shrunk_hit_rate = mean_predicted + confidence * (hit_rate - mean_predicted)
+        lift = shrunk_hit_rate / mean_predicted if mean_predicted else 1.0
+        analysis.append({
+            "risk_rank": index + 1, "n_jogos": count,
+            "pTop1_medio_previsto": mean_predicted, "Top1_hit_observado": hit_rate,
+            "Top1_fail_observado": 1.0 - hit_rate,
+            "ic95_hit_low": min(hit_rate, max(0.0, centre - radius)),
+            "ic95_hit_high": max(hit_rate, min(1.0, centre + radius)), "window_hit_rates": window_rates,
+            "risk_rank_stability": stability, "historical_confidence": confidence,
+            "confidence_label": "HIGH" if confidence >= 0.75 else ("MEDIUM" if confidence >= 0.45 else "LOW"),
+            "lift_raw": hit_rate / mean_predicted if mean_predicted else 1.0, "lift_shrunk": lift,
+        })
+    return analysis
+
+
+def _risk_rank_lifts(rows: list[dict[str, str]], temperature: float, rank_lifts: list[float]) -> list[float]:
+    """Learn stability- and sample-shrunk Top1 factors by risk rank 1..14."""
+    return [item["lift_shrunk"] for item in _risk_rank_analysis(rows, temperature, rank_lifts)]
 
 
 def _risk_log_loss(rows: list[dict[str, str]], temperature: float, rank_lifts: list[float], risk_lifts: list[float]) -> float:
@@ -135,6 +173,7 @@ def train(history_path: str | Path, model_path: str | Path) -> dict:
     temperature = _best_temperature(rows) if promoted else 1.0
     rank_lifts = _rank_lifts(rows, temperature) if rank_promoted else [1.0, 1.0, 1.0]
     risk_rank_lifts = _risk_rank_lifts(rows, temperature, rank_lifts) if risk_promoted else [1.0] * 14
+    risk_rank_audit = _risk_rank_analysis(rows, temperature, rank_lifts)
     model = {
         "type": "temperature_scaling",
         "temperature": temperature,
@@ -143,6 +182,7 @@ def train(history_path: str | Path, model_path: str | Path) -> dict:
         "rank_lifts": rank_lifts,
         "risk_rank_calibration_promoted": risk_promoted,
         "risk_rank_lifts": risk_rank_lifts,
+        "risk_rank_audit": risk_rank_audit,
         "validation_candidate_temperature": validation_candidate,
         "validation_selected_temperature": selected_temperature,
         "training_games": len(fit_rows),
