@@ -23,6 +23,17 @@ def main() -> None:
           f"Net13Gain={tail['net13_gain']:+d} "
           f"({tail['crossed_to_13plus']} ganhos, {tail['fell_below_13']} perdas)")
     print(f"Média de acertos: {tail['base_mean_hits']:.3f} -> {tail['challenger_mean_hits']:.3f}")
+    impact = tail["decision_impact"]
+    print("Funil de impacto decisório: "
+          f"concursos={impact['contests_evaluated']} | ranking mudou={impact['ranking_changed_contests']} | "
+          f"duplos mudaram={impact['double_set_changed_contests']} | bilhete mudou={impact['final_ticket_changed_contests']} | "
+          f"acertos mudaram={impact['hits_changed_contests']} | faixa 13+ mudou={impact['13plus_changed_contests']}")
+    print("Impacto condicional (bilhetes alterados): "
+          f"n={impact['n_changed_tickets']} | acertos médios "
+          f"{impact['mean_hits_champion_changed']:.3f} -> {impact['mean_hits_challenger_changed']:.3f} | "
+          f"DecisionNetGain={impact['decision_net_gain']:+d} | "
+          f"win/loss/tie={impact['decision_win_rate']:.1%}/"
+          f"{impact['decision_loss_rate']:.1%}/{impact['decision_tie_rate']:.1%}")
     print("\n=== AUDITORIA HISTÓRICA DO RISK_RANK ===")
     print("Rank | n | pTop1 previsto | hit observado | fail observado | IC95% hit | estabilidade | confiança | lift")
     for item in model["risk_rank_audit"]:
