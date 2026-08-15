@@ -40,6 +40,21 @@ def temperature_scale(probs: dict[str, float], temperature: float) -> dict[str, 
     return {key: value / total for key, value in powered.items()}
 
 
+def rank_scale(probs: dict[str, float], lifts: list[float] | tuple[float, ...]) -> dict[str, float]:
+    """Apply historical calibration factors by predicted rank and renormalize.
+
+    The rank is determined before applying the factors.  This makes the learned
+    correction independent of concrete labels (1/X/2), while the returned
+    probabilities are free to form a new, properly auditable ranking.
+    """
+    if len(lifts) != 3 or any(not math.isfinite(value) or value <= 0 for value in lifts):
+        raise ValueError("rank_lifts deve conter três fatores positivos")
+    ranking = rank_results(probs)
+    scaled = {result: probs[result] * lifts[index] for index, result in enumerate(ranking)}
+    total = sum(scaled.values())
+    return {result: value / total for result, value in scaled.items()}
+
+
 def actual_result(row: dict[str, str]) -> str:
     hits = [result for result in RESULTS if row.get(result) == "1"]
     if len(hits) != 1:
