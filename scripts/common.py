@@ -55,6 +55,22 @@ def rank_scale(probs: dict[str, float], lifts: list[float] | tuple[float, ...]) 
     return {result: value / total for result, value in scaled.items()}
 
 
+def top1_risk_scale(probs: dict[str, float], lift: float) -> dict[str, float]:
+    """Calibrate Top1 for a contest-relative risk rank and preserve the remainder.
+
+    ``lift`` is an observed/predicted ratio learned only from older contests.
+    Scaling the two other outcomes together preserves their relative evidence;
+    normalization keeps the result a valid probability distribution.
+    """
+    if not math.isfinite(lift) or lift <= 0:
+        raise ValueError("risk lift deve ser positivo")
+    top1 = rank_results(probs)[0]
+    scaled = dict(probs)
+    scaled[top1] *= lift
+    total = sum(scaled.values())
+    return {result: value / total for result, value in scaled.items()}
+
+
 def actual_result(row: dict[str, str]) -> str:
     hits = [result for result in RESULTS if row.get(result) == "1"]
     if len(hits) != 1:

@@ -1,6 +1,6 @@
 import unittest
 
-from scripts.common import rank_results, rank_scale
+from scripts.common import rank_results, rank_scale, top1_risk_scale
 from scripts.predict_results import hit_distribution, optimize, validate_ticket
 from scripts.train_model import _validated_temperature
 
@@ -27,6 +27,12 @@ class PipelineTests(unittest.TestCase):
     def test_rank_calibration_rejects_invalid_factors(self):
         with self.assertRaisesRegex(ValueError, "três fatores positivos"):
             rank_scale({"1": 0.5, "X": 0.3, "2": 0.2}, [1.0, 0.0, 1.0])
+
+    def test_risk_rank_calibration_preserves_distribution(self):
+        calibrated = top1_risk_scale({"1": 0.5, "X": 0.3, "2": 0.2}, 0.5)
+        self.assertAlmostEqual(sum(calibrated.values()), 1.0)
+        self.assertAlmostEqual(calibrated["X"] / calibrated["2"], 1.5)
+        self.assertLess(calibrated["1"], 0.5)
 
     def test_optimizer_enforces_all_hard_constraints(self):
         rows = []
