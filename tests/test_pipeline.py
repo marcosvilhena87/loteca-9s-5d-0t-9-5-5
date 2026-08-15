@@ -2,9 +2,15 @@ import unittest
 
 from scripts.common import rank_results
 from scripts.predict_results import optimize
+from scripts.train_model import _validated_temperature
 
 
 class PipelineTests(unittest.TestCase):
+    def test_calibration_is_only_promoted_after_out_of_sample_gain(self):
+        self.assertEqual(_validated_temperature(0.8, 0.95, 0.94), (0.8, True))
+        self.assertEqual(_validated_temperature(0.8, 0.95, 0.96), (1.0, False))
+        self.assertEqual(_validated_temperature(0.8, 0.95, 0.95), (1.0, False))
+
     def test_mandatory_tie_break(self):
         self.assertEqual(rank_results({"1": 0.4, "X": 0.3, "2": 0.3}), ("1", "2", "X"))
 

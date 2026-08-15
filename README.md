@@ -551,6 +551,16 @@ avaliar o resultado real do concurso N
 
 Nenhuma informação do concurso avaliado pode participar do treinamento, calibração, seleção de hiperparâmetros ou construção de features que não estivessem disponíveis antes daquele concurso.
 
+### Trava de promoção da calibração
+
+O calibrador de temperatura é ajustado apenas no bloco cronológico de treino e
+comparado às probabilidades brutas no bloco posterior de validação. A calibração
+só é promovida quando reduz o log-loss fora da amostra; caso contrário, o pipeline
+usa temperatura `1,0` e preserva as probabilidades originais. Depois de aprovada a
+metodologia, a temperatura de implantação é reajustada com todo o histórico já
+disponível, sem utilizar qualquer dado do próximo concurso. Essa trava evita que
+uma calibração sobreajustada distorça o cálculo de `P(acertos >= 13)`.
+
 ---
 
 ## Fronteira dos cinco duplos
