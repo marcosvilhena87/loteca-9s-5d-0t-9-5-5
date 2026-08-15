@@ -8,7 +8,7 @@ import math
 from dataclasses import dataclass
 from pathlib import Path
 
-from scripts.common import normalized_team, probabilities, rank_results, read_loteca_csv, temperature_scale
+from scripts.common import normalized_team, probabilities, rank_results, rank_scale, read_loteca_csv, temperature_scale
 from scripts.preprocess_data import validate_next_contest
 
 
@@ -91,11 +91,13 @@ def _allowed_options(row: dict[str, str], ranking: tuple[str, str, str]) -> list
     return options
 
 
-def optimize(rows: list[dict[str, str]], temperature: float) -> tuple[list[dict], float]:
+def optimize(
+    rows: list[dict[str, str]], temperature: float, rank_lifts: list[float] | tuple[float, ...] = (1.0, 1.0, 1.0)
+) -> tuple[list[dict], float]:
     validate_next_contest(rows)
     games = []
     for row in sorted(rows, key=lambda item: int(item["Jogo"])):
-        probs = temperature_scale(probabilities(row), temperature)
+        probs = rank_scale(temperature_scale(probabilities(row), temperature), rank_lifts)
         ranking = rank_results(probs)
         games.append((row, probs, ranking, _allowed_options(row, ranking)))
 
@@ -154,7 +156,9 @@ def optimize(rows: list[dict[str, str]], temperature: float) -> tuple[list[dict]
 
 def predict(next_path: str | Path, model_path: str | Path, output_path: str | Path) -> tuple[list[dict], float]:
     model = json.loads(Path(model_path).read_text(encoding="utf-8"))
-    predictions, success = optimize(read_loteca_csv(next_path), float(model["temperature"]))
+    predictions, success = optimize(
+        read_loteca_csv(next_path), float(model["temperature"]), model.get("rank_lifts", [1.0, 1.0, 1.0])
+    )
     destination = Path(output_path)
     destination.parent.mkdir(parents=True, exist_ok=True)
     with destination.open("w", encoding="utf-8", newline="") as stream:
