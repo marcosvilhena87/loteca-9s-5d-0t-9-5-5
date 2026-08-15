@@ -1,7 +1,7 @@
 import unittest
 
 from scripts.common import rank_results
-from scripts.predict_results import hit_distribution, optimize
+from scripts.predict_results import hit_distribution, optimize, validate_ticket
 from scripts.train_model import _validated_temperature
 
 
@@ -36,6 +36,20 @@ class PipelineTests(unittest.TestCase):
         self.assertIn("1", predictions[0]["palpite"])
         distribution = hit_distribution([item["probabilidade_coberta"] for item in predictions])
         self.assertAlmostEqual(probability, sum(distribution[13:]))
+
+    def test_independent_validator_rejects_a_tampered_ticket(self):
+        rows = []
+        for game in range(1, 15):
+            rows.append({
+                "Concurso": "1", "Jogo": str(game),
+                "Mandante": f"TIME {game} A", "Visitante": f"TIME {game} B",
+                "p(1)": "0,50", "p(x)": "0,30", "p(2)": "0,20",
+            })
+        predictions, _ = optimize(rows, 1.0)
+        validate_ticket(predictions)
+        predictions[0]["palpite"] = "1X2"
+        with self.assertRaisesRegex(ValueError, "Hard Constraints violadas"):
+            validate_ticket(predictions)
 
 
 if __name__ == "__main__":
