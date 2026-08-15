@@ -2,7 +2,7 @@ import unittest
 
 from scripts.common import rank_results, rank_scale, top1_risk_scale
 from scripts.predict_results import hit_distribution, optimize, validate_ticket
-from scripts.train_model import _risk_rank_analysis, _tail_metrics, _validated_temperature
+from scripts.train_model import _decision_impact, _risk_rank_analysis, _tail_metrics, _validated_temperature
 
 
 class PipelineTests(unittest.TestCase):
@@ -64,6 +64,26 @@ class PipelineTests(unittest.TestCase):
     def test_tail_metrics_reject_unpaired_results(self):
         with self.assertRaisesRegex(ValueError, "mesmo tamanho"):
             _tail_metrics([12], [])
+
+    def test_decision_impact_counts_only_effective_ticket_changes(self):
+        def ticket(mark: str, kind: str = "seco", ranking=("1", "X", "2")):
+            return [{
+                "Jogo": "1", "palpite": mark, "tipo": kind,
+                "top1": ranking[0], "top2": ranking[1], "top3": ranking[2],
+            }]
+
+        metrics = _decision_impact([
+            (ticket("1"), ticket("1"), 12, 12),
+            (ticket("1"), ticket("1X", "duplo"), 12, 13),
+            (ticket("1"), ticket("2", ranking=("2", "X", "1")), 13, 11),
+        ])
+        self.assertEqual(metrics["final_ticket_changed_contests"], 2)
+        self.assertEqual(metrics["double_set_changed_contests"], 1)
+        self.assertEqual(metrics["ranking_changed_contests"], 1)
+        self.assertEqual(metrics["13plus_changed_contests"], 2)
+        self.assertEqual(metrics["decision_net_gain"], -1)
+        self.assertAlmostEqual(metrics["decision_win_rate"], 0.5)
+        self.assertAlmostEqual(metrics["decision_loss_rate"], 0.5)
 
     def test_optimizer_enforces_all_hard_constraints(self):
         rows = []

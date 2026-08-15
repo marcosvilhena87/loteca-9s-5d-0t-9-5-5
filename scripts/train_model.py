@@ -172,6 +172,67 @@ def _tail_metrics(base_hits: list[int], challenger_hits: list[int]) -> dict:
     }
 
 
+def _decision_impact(contests: list[tuple[list[dict], list[dict], int, int]]) -> dict:
+    """Measure whether probability changes reach, and improve, final tickets.
+
+    Calibration metrics alone cannot reveal operational value: a probability
+    adjustment may leave every selected mark unchanged.  This paired funnel
+    deliberately compares the effective marks (rather than incidental output
+    ordering) and reports outcomes only where the challenger intervened.
+    """
+    changed = []
+    ranking_changes = 0
+    double_changes = 0
+    hit_changes = 0
+    tier_changes = 0
+    for base, challenger, base_hits, challenger_hits in contests:
+        base_by_game = {int(game["Jogo"]): game for game in base}
+        challenger_by_game = {int(game["Jogo"]): game for game in challenger}
+        if any(
+            (base_by_game[game]["top1"], base_by_game[game]["top2"], base_by_game[game]["top3"])
+            != (challenger_by_game[game]["top1"], challenger_by_game[game]["top2"], challenger_by_game[game]["top3"])
+            for game in base_by_game
+        ):
+            ranking_changes += 1
+        base_doubles = {game for game, item in base_by_game.items() if item["tipo"] == "duplo"}
+        challenger_doubles = {game for game, item in challenger_by_game.items() if item["tipo"] == "duplo"}
+        if base_doubles != challenger_doubles:
+            double_changes += 1
+        ticket_changed = any(
+            base_by_game[game]["palpite"] != challenger_by_game[game]["palpite"]
+            for game in base_by_game
+        )
+        if ticket_changed:
+            changed.append((base_hits, challenger_hits))
+        hit_changes += base_hits != challenger_hits
+        tier_changes += (base_hits >= 13) != (challenger_hits >= 13)
+
+    total = len(contests)
+    wins = sum(challenger > base for base, challenger in changed)
+    losses = sum(challenger < base for base, challenger in changed)
+    ties = len(changed) - wins - losses
+    return {
+        "contests_evaluated": total,
+        "ranking_changed_contests": ranking_changes,
+        "double_set_changed_contests": double_changes,
+        "final_ticket_changed_contests": len(changed),
+        "hits_changed_contests": hit_changes,
+        "13plus_changed_contests": tier_changes,
+        "top1_ranking_change_rate": ranking_changes / total if total else 0.0,
+        "double_set_change_rate": double_changes / total if total else 0.0,
+        "final_ticket_change_rate": len(changed) / total if total else 0.0,
+        "n_changed_tickets": len(changed),
+        "mean_hits_champion_changed": sum(base for base, _ in changed) / len(changed) if changed else 0.0,
+        "mean_hits_challenger_changed": sum(challenger for _, challenger in changed) / len(changed) if changed else 0.0,
+        "13plus_champion_changed": sum(base >= 13 for base, _ in changed),
+        "13plus_challenger_changed": sum(challenger >= 13 for _, challenger in changed),
+        "decision_net_gain": sum(challenger - base for base, challenger in changed),
+        "decision_win_rate": wins / len(changed) if changed else 0.0,
+        "decision_loss_rate": losses / len(changed) if changed else 0.0,
+        "decision_tie_rate": ties / len(changed) if changed else 0.0,
+    }
+
+
 def _ticket_tail_validation(
     rows: list[dict[str, str]], temperature: float, rank_lifts: list[float], risk_lifts: list[float]
 ) -> dict:
@@ -183,15 +244,20 @@ def _ticket_tail_validation(
     contests: dict[int, list[dict[str, str]]] = {}
     for row in rows:
         contests.setdefault(int(row["Concurso"]), []).append(row)
-    base_hits, challenger_hits = [], []
+    base_hits, challenger_hits, paired_contests = [], [], []
     for contest in sorted(contests):
         contest_rows = contests[contest]
         base, _ = optimize(contest_rows, temperature, rank_lifts)
         challenger, _ = optimize(contest_rows, temperature, rank_lifts, risk_lifts)
         results = {int(row["Jogo"]): actual_result(row) for row in contest_rows}
-        base_hits.append(sum(results[int(game["Jogo"])] in game["palpite"] for game in base))
-        challenger_hits.append(sum(results[int(game["Jogo"])] in game["palpite"] for game in challenger))
-    return _tail_metrics(base_hits, challenger_hits)
+        base_count = sum(results[int(game["Jogo"])] in game["palpite"] for game in base)
+        challenger_count = sum(results[int(game["Jogo"])] in game["palpite"] for game in challenger)
+        base_hits.append(base_count)
+        challenger_hits.append(challenger_count)
+        paired_contests.append((base, challenger, base_count, challenger_count))
+    metrics = _tail_metrics(base_hits, challenger_hits)
+    metrics["decision_impact"] = _decision_impact(paired_contests)
+    return metrics
 
 
 def train(history_path: str | Path, model_path: str | Path) -> dict:
@@ -225,6 +291,7 @@ def train(history_path: str | Path, model_path: str | Path) -> dict:
         risk_validation_loss + MIN_VALIDATION_GAIN < base_validation_loss
         and risk_tail_validation["challenger_13plus"] >= risk_tail_validation["base_13plus"]
         and risk_tail_validation["net13_gain"] >= 0
+        and risk_tail_validation["decision_impact"]["decision_net_gain"] >= 0
     )
 
     # After the calibration method has passed the chronological gate, refit its

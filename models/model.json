@@ -8,22 +8,22 @@
     1.0,
     1.0
   ],
-  "risk_rank_calibration_promoted": true,
+  "risk_rank_calibration_promoted": false,
   "risk_rank_lifts": [
-    0.9601835043475226,
-    0.9851687381835926,
-    0.9943147569869144,
-    0.9803694384410908,
-    0.9802179193823197,
-    1.012212573475473,
-    0.9884728182534277,
-    0.9697431293442408,
-    0.9503793097656374,
-    0.9858698093032894,
-    1.029462257837938,
-    1.051581471548906,
-    0.9866250934784357,
-    1.0073357888503844
+    1.0,
+    1.0,
+    1.0,
+    1.0,
+    1.0,
+    1.0,
+    1.0,
+    1.0,
+    1.0,
+    1.0,
+    1.0,
+    1.0,
+    1.0,
+    1.0
   ],
   "risk_rank_audit": [
     {
@@ -347,6 +347,26 @@
       "8->7": 1,
       "9->10": 1,
       "10->9": 1
+    },
+    "decision_impact": {
+      "contests_evaluated": 90,
+      "ranking_changed_contests": 16,
+      "double_set_changed_contests": 1,
+      "final_ticket_changed_contests": 17,
+      "hits_changed_contests": 10,
+      "13plus_changed_contests": 0,
+      "top1_ranking_change_rate": 0.17777777777777778,
+      "double_set_change_rate": 0.011111111111111112,
+      "final_ticket_change_rate": 0.18888888888888888,
+      "n_changed_tickets": 17,
+      "mean_hits_champion_changed": 8.176470588235293,
+      "mean_hits_challenger_changed": 8.058823529411764,
+      "13plus_champion_changed": 0,
+      "13plus_challenger_changed": 0,
+      "decision_net_gain": -2,
+      "decision_win_rate": 0.23529411764705882,
+      "decision_loss_rate": 0.35294117647058826,
+      "decision_tie_rate": 0.4117647058823529
     }
   },
   "deployment_log_loss_all_history": 0.9846092072913122
