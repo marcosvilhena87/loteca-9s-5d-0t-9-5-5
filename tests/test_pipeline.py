@@ -1,11 +1,16 @@
 import unittest
 
 from scripts.common import rank_results
-from scripts.predict_results import optimize
+from scripts.predict_results import hit_distribution, optimize
 from scripts.train_model import _validated_temperature
 
 
 class PipelineTests(unittest.TestCase):
+    def test_hit_distribution_is_exact_and_normalized(self):
+        distribution = hit_distribution([0.5, 0.25])
+        self.assertEqual(distribution, [0.375, 0.5, 0.125])
+        self.assertAlmostEqual(sum(distribution), 1.0)
+
     def test_calibration_is_only_promoted_after_out_of_sample_gain(self):
         self.assertEqual(_validated_temperature(0.8, 0.95, 0.94), (0.8, True))
         self.assertEqual(_validated_temperature(0.8, 0.95, 0.96), (1.0, False))
@@ -29,6 +34,8 @@ class PipelineTests(unittest.TestCase):
         for rank, expected in ((1, 9), (2, 5), (3, 5)):
             self.assertEqual(sum(f"top{rank}" in item["ranks_selecionados"].split("+") for item in predictions), expected)
         self.assertIn("1", predictions[0]["palpite"])
+        distribution = hit_distribution([item["probabilidade_coberta"] for item in predictions])
+        self.assertAlmostEqual(probability, sum(distribution[13:]))
 
 
 if __name__ == "__main__":
