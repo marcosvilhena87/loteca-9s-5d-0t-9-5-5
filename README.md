@@ -1449,6 +1449,17 @@ A preferência só deve prevalecer quando o custo for aceitável dentro da estra
 - `scripts/predict_results.py`: probabilidades, ranking, seletores, evidência histórica, otimização 9-5-5 e palpite final.
 - `output/predictions.csv`: saída auditável.
 
+### Calibração histórica implantada
+
+O treinamento estima, para cada posição relativa de risco `1..14`, um fator
+suavizado entre a frequência observada e a probabilidade prevista de acerto do
+Top1. A correção preserva a proporção entre Top2 e Top3, é ajustada somente em
+concursos cronologicamente anteriores e só é promovida quando reduz o log-loss
+no bloco de validação posterior. Se esse teste fora da amostra falhar, os 14
+fatores ficam neutros (`1.0`). O `risk_rank` usado e as probabilidades já
+calibradas são gravados em `output/predictions.csv`, sem relaxar nenhuma Hard
+Constraint.
+
 ---
 
 ## Formato dos CSVs

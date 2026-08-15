@@ -8,6 +8,23 @@
     1.0,
     1.0
   ],
+  "risk_rank_calibration_promoted": true,
+  "risk_rank_lifts": [
+    0.9552466350288755,
+    0.9733280252711621,
+    0.9924841157231314,
+    0.9757702734640453,
+    0.9760379544816974,
+    1.0246228509296524,
+    0.9797885593835893,
+    0.9452100967584409,
+    0.9207101400972565,
+    0.9816671670512267,
+    1.039341272999504,
+    1.0672681317611608,
+    0.9834016327235151,
+    1.008646151556666
+  ],
   "validation_candidate_temperature": 0.88,
   "validation_selected_temperature": 0.88,
   "training_games": 5012,
@@ -17,5 +34,7 @@
   "validation_log_loss_calibrated": 0.9666445646082557,
   "validation_log_loss_temperature": 0.9666445646082557,
   "validation_log_loss_rank_calibrated": 0.966981220954632,
+  "validation_log_loss_before_risk_rank": 0.9666445646082557,
+  "validation_log_loss_risk_rank": 0.966478907379857,
   "deployment_log_loss_all_history": 0.9846092072913122
 }

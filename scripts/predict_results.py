@@ -8,7 +8,7 @@ import math
 from dataclasses import dataclass
 from pathlib import Path
 
-from scripts.common import normalized_team, probabilities, rank_results, rank_scale, read_loteca_csv, temperature_scale
+from scripts.common import normalized_team, probabilities, rank_results, rank_scale, read_loteca_csv, temperature_scale, top1_risk_scale
 from scripts.preprocess_data import validate_next_contest
 
 
@@ -92,18 +92,30 @@ def _allowed_options(row: dict[str, str], ranking: tuple[str, str, str]) -> list
 
 
 def optimize(
-    rows: list[dict[str, str]], temperature: float, rank_lifts: list[float] | tuple[float, ...] = (1.0, 1.0, 1.0)
+    rows: list[dict[str, str]], temperature: float, rank_lifts: list[float] | tuple[float, ...] = (1.0, 1.0, 1.0),
+    risk_rank_lifts: list[float] | tuple[float, ...] = (1.0,) * 14,
 ) -> tuple[list[dict], float]:
     validate_next_contest(rows)
+    if len(risk_rank_lifts) != 14:
+        raise ValueError("risk_rank_lifts deve conter 14 fatores")
     games = []
-    for row in sorted(rows, key=lambda item: int(item["Jogo"])):
+    prepared = []
+    for row in rows:
         probs = rank_scale(temperature_scale(probabilities(row), temperature), rank_lifts)
+        prepared.append((row, probs, probs[rank_results(probs)[0]]))
+    risk_rank_by_game = {
+        int(row["Jogo"]): index + 1
+        for index, (row, _, _) in enumerate(sorted(prepared, key=lambda item: (item[2], int(item[0]["Jogo"]))))
+    }
+    for row, probs, _ in sorted(prepared, key=lambda item: int(item[0]["Jogo"])):
+        risk_rank = risk_rank_by_game[int(row["Jogo"])]
+        probs = top1_risk_scale(probs, risk_rank_lifts[risk_rank - 1])
         ranking = rank_results(probs)
-        games.append((row, probs, ranking, _allowed_options(row, ranking)))
+        games.append((row, probs, ranking, _allowed_options(row, ranking), risk_rank))
 
     # State: number of selected rank-1/rank-2/rank-3 outcomes and doubles.
     states: dict[tuple[int, int, int, int], list[Candidate]] = {(0, 0, 0, 0): [Candidate(1.0, 0.0, ())]}
-    for row, probs, ranking, options in games:
+    for row, probs, ranking, options, _ in games:
         expanded: dict[tuple[int, int, int, int], list[Candidate]] = {}
         for counts, frontier in states.items():
             for option in options:
@@ -123,7 +135,7 @@ def optimize(
     def soft_score(candidate: Candidate) -> tuple[int, int]:
         top1_early = sum(0 in choice for choice in candidate.choices[:9])
         avoids_palmeiras = 0
-        for (row, _, ranking, _), choice in zip(games, candidate.choices):
+        for (row, _, ranking, _, _), choice in zip(games, candidate.choices):
             home, away = normalized_team(row["Mandante"]), normalized_team(row["Visitante"])
             if "PALMEIRAS/SP" in (home, away):
                 victory = "1" if home == "PALMEIRAS/SP" else "2"
@@ -135,7 +147,7 @@ def optimize(
     best = max(near_optimal, key=soft_score)
 
     output = []
-    for (row, probs, ranking, _), choice in zip(games, best.choices):
+    for (row, probs, ranking, _, risk_rank), choice in zip(games, best.choices):
         selected = [ranking[index] for index in choice]
         ordered_marks = "".join(result for result in ("1", "X", "2") if result in selected)
         output.append({
@@ -146,6 +158,7 @@ def optimize(
             "gap12": probs[ranking[0]] - probs[ranking[1]],
             "gap13": probs[ranking[0]] - probs[ranking[2]],
             "entropy": -sum(probability * math.log(probability) for probability in probs.values()),
+            "risk_rank": risk_rank,
             "tipo": "duplo" if len(choice) == 2 else "seco", "palpite": ordered_marks,
             "ranks_selecionados": "+".join(f"top{index + 1}" for index in choice),
             "probabilidade_coberta": sum(probs[result] for result in selected),
@@ -157,7 +170,8 @@ def optimize(
 def predict(next_path: str | Path, model_path: str | Path, output_path: str | Path) -> tuple[list[dict], float]:
     model = json.loads(Path(model_path).read_text(encoding="utf-8"))
     predictions, success = optimize(
-        read_loteca_csv(next_path), float(model["temperature"]), model.get("rank_lifts", [1.0, 1.0, 1.0])
+        read_loteca_csv(next_path), float(model["temperature"]), model.get("rank_lifts", [1.0, 1.0, 1.0]),
+        model.get("risk_rank_lifts", [1.0] * 14),
     )
     destination = Path(output_path)
     destination.parent.mkdir(parents=True, exist_ok=True)
@@ -174,7 +188,7 @@ def print_telemetry(predictions: list[dict], success: float) -> None:
         print(f"Jogo {game['Jogo']:>2} | {game['Mandante']} x {game['Visitante']}")
         print(f"  p(1)={game['p(1)']:.4f} p(X)={game['p(X)']:.4f} p(2)={game['p(2)']:.4f}")
         print(f"  ranking: {game['top1']} ({game['p(top1)']:.4f}) > {game['top2']} ({game['p(top2)']:.4f}) > {game['top3']} ({game['p(top3)']:.4f})")
-        print(f"  gap12={game['gap12']:.4f} gap13={game['gap13']:.4f} entropia={game['entropy']:.4f}")
+        print(f"  gap12={game['gap12']:.4f} gap13={game['gap13']:.4f} entropia={game['entropy']:.4f} risk_rank={game['risk_rank']}")
         print(f"  {game['tipo']}: {game['palpite']} [{game['ranks_selecionados']}] cobertura={game['probabilidade_coberta']:.4f}")
     dry = sum(game["tipo"] == "seco" for game in predictions)
     doubles = sum(game["tipo"] == "duplo" for game in predictions)

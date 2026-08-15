@@ -13,6 +13,9 @@ def main() -> None:
     print(f"Log-loss validação: bruto={model['validation_log_loss_raw']:.6f}, calibrado={model['validation_log_loss_calibrated']:.6f}")
     rank_status = "promovida" if model["rank_calibration_promoted"] else "rejeitada"
     print(f"Calibração por rank: {rank_status} | lifts Top1/2/3={model['rank_lifts']}")
+    risk_status = "promovida" if model["risk_rank_calibration_promoted"] else "rejeitada"
+    print(f"Calibração por risk_rank: {risk_status}")
+    print(f"Log-loss risk_rank: base={model['validation_log_loss_before_risk_rank']:.6f}, calibrado={model['validation_log_loss_risk_rank']:.6f}")
     predictions, success = predict("data/proximo_concurso.csv", "models/model.json", "output/predictions.csv")
     print_telemetry(predictions, success)
 
