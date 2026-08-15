@@ -370,6 +370,28 @@ output/predictions.csv
 
 O arquivo deve preservar informações suficientes para reconstruir a decisão, incluindo probabilidades, rankings, marcações escolhidas e o palpite final do concurso.
 
+## Execução
+
+O pipeline usa apenas a biblioteca padrão do Python 3.10+:
+
+```bash
+python main.py
+```
+
+A execução valida os CSVs, ajusta uma calibração por temperatura em uma divisão
+cronológica do histórico e resolve a aposta por programação dinâmica. Para cada
+estado viável, o otimizador mantém a fronteira de Pareto das probabilidades de
+zero e uma falha; assim, a função final calculada é exatamente
+`P(14 acertos) + P(13 acertos)`, sob a hipótese explícita de independência entre
+os jogos. As preferências suaves são usadas somente para desempatar soluções
+com probabilidade equivalente, nunca para relaxar uma restrição obrigatória.
+
+Os testes automatizados podem ser executados com:
+
+```bash
+python -m unittest discover -v
+```
+
 ---
 
 ## Regra fundamental
