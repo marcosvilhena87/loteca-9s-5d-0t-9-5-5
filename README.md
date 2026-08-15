@@ -1353,6 +1353,15 @@ Testes:
 python -m unittest discover -v
 ```
 
+Durante o treinamento, o bloco cronologicamente posterior (20% dos concursos)
+também é usado para comparar, concurso a concurso, os bilhetes completos
+`BASE` e `RISK_RANK`. A promoção do ajuste por `risk_rank` exige
+simultaneamente ganho de log-loss, ausência de redução no total real de 13+ e
+`Net13Gain >= 0`. O relatório inclui 12+, médias de acertos e a matriz esparsa
+de transições (`acertos BASE -> acertos RISK_RANK`); todos os bilhetes dessa
+avaliação passam pelo mesmo otimizador e pelo mesmo validador de Hard
+Constraints usados na previsão final.
+
 ---
 
 # Ordem recomendada de implementação

@@ -142,6 +142,58 @@ def _risk_log_loss(rows: list[dict[str, str]], temperature: float, rank_lifts: l
     return loss / len(rows)
 
 
+def _tail_metrics(base_hits: list[int], challenger_hits: list[int]) -> dict:
+    """Summarize paired ticket results with emphasis on the 13+ objective.
+
+    Pairing by contest is important: ``Net13Gain`` is not the difference of
+    two unrelated averages, but the balance of contests that actually cross
+    the target boundary in either direction.
+    """
+    if len(base_hits) != len(challenger_hits) or not base_hits:
+        raise ValueError("Acertos BASE e challenger devem ter o mesmo tamanho não vazio")
+    gains = sum(base < 13 <= challenger for base, challenger in zip(base_hits, challenger_hits))
+    losses = sum(challenger < 13 <= base for base, challenger in zip(base_hits, challenger_hits))
+    transitions: dict[str, int] = {}
+    for base, challenger in zip(base_hits, challenger_hits):
+        key = f"{base}->{challenger}"
+        transitions[key] = transitions.get(key, 0) + 1
+    return {
+        "contests": len(base_hits),
+        "base_13plus": sum(hits >= 13 for hits in base_hits),
+        "challenger_13plus": sum(hits >= 13 for hits in challenger_hits),
+        "base_12plus": sum(hits >= 12 for hits in base_hits),
+        "challenger_12plus": sum(hits >= 12 for hits in challenger_hits),
+        "base_mean_hits": sum(base_hits) / len(base_hits),
+        "challenger_mean_hits": sum(challenger_hits) / len(challenger_hits),
+        "crossed_to_13plus": gains,
+        "fell_below_13": losses,
+        "net13_gain": gains - losses,
+        "transitions": transitions,
+    }
+
+
+def _ticket_tail_validation(
+    rows: list[dict[str, str]], temperature: float, rank_lifts: list[float], risk_lifts: list[float]
+) -> dict:
+    """Compare BASE and RISK_RANK on real, chronologically held-out contests."""
+    # Local import keeps the probability utilities usable without importing
+    # the comparatively heavier constrained optimizer during module loading.
+    from scripts.predict_results import optimize
+
+    contests: dict[int, list[dict[str, str]]] = {}
+    for row in rows:
+        contests.setdefault(int(row["Concurso"]), []).append(row)
+    base_hits, challenger_hits = [], []
+    for contest in sorted(contests):
+        contest_rows = contests[contest]
+        base, _ = optimize(contest_rows, temperature, rank_lifts)
+        challenger, _ = optimize(contest_rows, temperature, rank_lifts, risk_lifts)
+        results = {int(row["Jogo"]): actual_result(row) for row in contest_rows}
+        base_hits.append(sum(results[int(game["Jogo"])] in game["palpite"] for game in base))
+        challenger_hits.append(sum(results[int(game["Jogo"])] in game["palpite"] for game in challenger))
+    return _tail_metrics(base_hits, challenger_hits)
+
+
 def train(history_path: str | Path, model_path: str | Path) -> dict:
     rows = read_loteca_csv(history_path)
     validate_rows(rows, historical=True)
@@ -164,7 +216,16 @@ def train(history_path: str | Path, model_path: str | Path) -> dict:
     risk_validation_loss = _risk_log_loss(
         validation, validation_candidate if promoted else 1.0, validation_rank_lifts, candidate_risk_lifts
     )
-    risk_promoted = risk_validation_loss + MIN_VALIDATION_GAIN < base_validation_loss
+    risk_tail_validation = _ticket_tail_validation(
+        validation, validation_candidate if promoted else 1.0, validation_rank_lifts, candidate_risk_lifts
+    )
+    # A probabilistic gain alone is insufficient.  Never deploy risk_rank when
+    # its real held-out tickets lose 13+ contests or have negative Net13Gain.
+    risk_promoted = (
+        risk_validation_loss + MIN_VALIDATION_GAIN < base_validation_loss
+        and risk_tail_validation["challenger_13plus"] >= risk_tail_validation["base_13plus"]
+        and risk_tail_validation["net13_gain"] >= 0
+    )
 
     # After the calibration method has passed the chronological gate, refit its
     # sole parameter with every contest available before deployment.  The
@@ -194,6 +255,7 @@ def train(history_path: str | Path, model_path: str | Path) -> dict:
         "validation_log_loss_rank_calibrated": rank_loss,
         "validation_log_loss_before_risk_rank": base_validation_loss,
         "validation_log_loss_risk_rank": risk_validation_loss,
+        "risk_rank_tail_validation": risk_tail_validation,
         "deployment_log_loss_all_history": log_loss(rows, temperature),
     }
     destination = Path(model_path)

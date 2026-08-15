@@ -318,5 +318,36 @@
   "validation_log_loss_rank_calibrated": 0.966981220954632,
   "validation_log_loss_before_risk_rank": 0.9666445646082557,
   "validation_log_loss_risk_rank": 0.9664411814376084,
+  "risk_rank_tail_validation": {
+    "contests": 90,
+    "base_13plus": 0,
+    "challenger_13plus": 0,
+    "base_12plus": 1,
+    "challenger_12plus": 1,
+    "base_mean_hits": 8.222222222222221,
+    "challenger_mean_hits": 8.2,
+    "crossed_to_13plus": 0,
+    "fell_below_13": 0,
+    "net13_gain": 0,
+    "transitions": {
+      "8->8": 16,
+      "10->10": 11,
+      "9->9": 23,
+      "4->4": 4,
+      "7->7": 12,
+      "11->11": 6,
+      "6->6": 5,
+      "8->9": 2,
+      "6->5": 2,
+      "5->5": 2,
+      "12->12": 1,
+      "9->8": 1,
+      "6->7": 1,
+      "7->6": 1,
+      "8->7": 1,
+      "9->10": 1,
+      "10->9": 1
+    }
+  },
   "deployment_log_loss_all_history": 0.9846092072913122
 }

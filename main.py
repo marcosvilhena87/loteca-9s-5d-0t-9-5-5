@@ -16,6 +16,13 @@ def main() -> None:
     risk_status = "promovida" if model["risk_rank_calibration_promoted"] else "rejeitada"
     print(f"Calibração por risk_rank: {risk_status}")
     print(f"Log-loss risk_rank: base={model['validation_log_loss_before_risk_rank']:.6f}, calibrado={model['validation_log_loss_risk_rank']:.6f}")
+    tail = model["risk_rank_tail_validation"]
+    print("Validação real dos bilhetes risk_rank: "
+          f"13+ {tail['base_13plus']} -> {tail['challenger_13plus']} | "
+          f"12+ {tail['base_12plus']} -> {tail['challenger_12plus']} | "
+          f"Net13Gain={tail['net13_gain']:+d} "
+          f"({tail['crossed_to_13plus']} ganhos, {tail['fell_below_13']} perdas)")
+    print(f"Média de acertos: {tail['base_mean_hits']:.3f} -> {tail['challenger_mean_hits']:.3f}")
     print("\n=== AUDITORIA HISTÓRICA DO RISK_RANK ===")
     print("Rank | n | pTop1 previsto | hit observado | fail observado | IC95% hit | estabilidade | confiança | lift")
     for item in model["risk_rank_audit"]:
