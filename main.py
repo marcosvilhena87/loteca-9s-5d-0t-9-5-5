@@ -16,6 +16,14 @@ def main() -> None:
     risk_status = "promovida" if model["risk_rank_calibration_promoted"] else "rejeitada"
     print(f"Calibração por risk_rank: {risk_status}")
     print(f"Log-loss risk_rank: base={model['validation_log_loss_before_risk_rank']:.6f}, calibrado={model['validation_log_loss_risk_rank']:.6f}")
+    print("\n=== AUDITORIA HISTÓRICA DO RISK_RANK ===")
+    print("Rank | n | pTop1 previsto | hit observado | fail observado | IC95% hit | estabilidade | confiança | lift")
+    for item in model["risk_rank_audit"]:
+        print(f"{item['risk_rank']:>4} | {item['n_jogos']:>3} | {item['pTop1_medio_previsto']:.4f} | "
+              f"{item['Top1_hit_observado']:.4f} | {item['Top1_fail_observado']:.4f} | "
+              f"[{item['ic95_hit_low']:.4f}, {item['ic95_hit_high']:.4f}] | "
+              f"{item['risk_rank_stability']:.3f} | {item['confidence_label']} "
+              f"({item['historical_confidence']:.3f}) | {item['lift_shrunk']:.4f}")
     predictions, success = predict("data/proximo_concurso.csv", "models/model.json", "output/predictions.csv")
     print_telemetry(predictions, success)
 
