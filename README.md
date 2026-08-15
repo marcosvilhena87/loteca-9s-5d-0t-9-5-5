@@ -91,6 +91,70 @@ As restrições abaixo devem orientar a otimização, mas podem ser flexibilizad
 
 ---
 
+## Hipótese estrutural 9-5-5
+
+Sob as Hard Constraints atuais, uma configuração merece ser tratada como **baseline estrutural explícito**, e não como regra obrigatória:
+
+```text
+9 jogos: seco Top1
+5 jogos: duplo Top2 + Top3
+```
+
+Essa configuração satisfaz simultaneamente:
+
+```text
+9 secos
+5 duplos
+0 triplos
+
+9 Top1
+5 Top2
+5 Top3
+```
+
+Ela surge naturalmente porque `Top1` é, por definição, a maior probabilidade individual de cada partida, enquanto um duplo `Top2+Top3` cobre exatamente o evento complementar ao Top1:
+
+```text
+P(Top2 ou Top3) = 1 - p(top1)
+```
+
+Consequentemente, uma baseline simples para auditoria é:
+
+```text
+9 maiores p(top1)  -> seco Top1
+5 menores p(top1)  -> duplo Top2+Top3
+```
+
+Essa baseline **não substitui o otimizador**. Ela deve ser usada como referência para medir se modelos históricos, meta-modelos e heurísticas adicionais realmente geram ganho em `P(acertos >= 13)` ou apenas reproduzem uma solução estrutural já implícita nas restrições.
+
+### Relação geral entre os tipos de duplo
+
+Definindo:
+
+```text
+D12 = quantidade de duplos Top1+Top2
+D13 = quantidade de duplos Top1+Top3
+D23 = quantidade de duplos Top2+Top3
+```
+
+com:
+
+```text
+D12 + D13 + D23 = 5
+```
+
+as contagens de secos necessárias para fechar exatamente `9 Top1 + 5 Top2 + 5 Top3` obedecem a:
+
+```text
+SecoTop1 = 4 + D23
+SecoTop2 = D13
+SecoTop3 = D12
+```
+
+Logo, qualquer uso de `Top1+Top2` força a existência de um **Top3 seco** em outra partida, e qualquer uso de `Top1+Top3` força a existência de um **Top2 seco**. Essa compensação estrutural deve ser considerada explicitamente na otimização global.
+
+---
+
 ## Estrutura do repositório
 
 ```text
@@ -299,6 +363,252 @@ P(acertos >= 13)
 
 ---
 
+## Features recomendadas para aprimoramento
+
+Além de `p(top1)`, `p(top2)` e `p(top3)`, devem ser avaliadas features que representem a incerteza e a proximidade entre os três resultados:
+
+```text
+gap12 = p(top1) - p(top2)
+gap23 = p(top2) - p(top3)
+gap13 = p(top1) - p(top3)
+entropy = entropia de p(1), p(X), p(2)
+```
+
+Essas features podem ajudar a identificar partidas em que abandonar o Top1 é mais justificável do que sugere apenas `1 - p(top1)`.
+
+Também podem ser avaliados:
+
+- ranking concreto dos resultados (`1`, `X`, `2`) em cada partida;
+- posição do jogo no concurso;
+- perfil probabilístico do concurso inteiro;
+- quantidade de favoritos fortes;
+- quantidade de jogos equilibrados;
+- médias e dispersões de `p(top1)`, `p(top2)` e `p(top3)`.
+
+---
+
+## Calibração histórica por rank
+
+Além da calibração global de `p(1)`, `p(X)` e `p(2)`, o sistema deve auditar especificamente:
+
+```text
+p(top1) previsto vs frequência real de top1_hit
+p(top2) previsto vs frequência real de top2_hit
+p(top3) previsto vs frequência real de top3_hit
+```
+
+A análise deve ser feita preferencialmente em faixas de probabilidade e de forma walk-forward.
+
+Exemplo conceitual:
+
+```text
+Faixa p(top1) | p(top1) médio | frequência top1_hit | lift
+0,40-0,45     | 0,426         | 0,389               | 0,913
+```
+
+Pode-se definir:
+
+```text
+HistoricalLiftTopK = frequência_real_topK_hit / probabilidade_média_prevista_topK
+```
+
+Esse lift deve ser tratado como sinal de calibração ou feature de meta-modelo, não como substituição automática da probabilidade prevista.
+
+---
+
+## Meta-modelo de falha do Top1
+
+Uma linha prioritária de aprimoramento é modelar diretamente:
+
+```text
+P(top1_hit = 0)
+```
+
+ou, equivalentemente:
+
+```text
+P(Top2 ou Top3)
+```
+
+O objetivo desse meta-modelo é distinguir jogos com valores semelhantes de `p(top1)` nos quais o histórico indica riscos diferentes de falha do favorito probabilístico.
+
+Features candidatas:
+
+```text
+p(top1)
+p(top2)
+p(top3)
+gap12
+gap23
+gap13
+entropy
+ranking 1/X/2
+posição do jogo
+features globais do concurso
+```
+
+A seleção dos cinco jogos candidatos a `Top2+Top3` pode então comparar:
+
+```text
+FailRaw = 1 - p(top1)
+FailAdjusted = P_meta(top1_hit = 0)
+```
+
+O meta-modelo só deve ser incorporado à estratégia final se superar a baseline estrutural em validação walk-forward, especialmente em `P(acertos >= 13)`.
+
+---
+
+## Regime do concurso e concursos semelhantes
+
+Pode ser criado um vetor de características para cada concurso, por exemplo:
+
+```text
+mean_top1
+mean_top2
+mean_top3
+median_gap12
+mean_entropy
+min_top1
+max_top1
+quantidade de p(top1) > 0,60
+quantidade de jogos equilibrados
+```
+
+Esse vetor permite comparar o próximo concurso com concursos históricos semelhantes, por exemplo via KNN ou agrupamento de regimes.
+
+O objetivo é estimar se o próximo concurso apresenta perfil historicamente associado a maior ou menor incidência de:
+
+```text
+top1_hit
+top2_hit
+top3_hit
+```
+
+Qualquer sinal de regime deve complementar, e não substituir, as probabilidades específicas de cada partida.
+
+---
+
+## Backtests obrigatórios para novas heurísticas
+
+Toda nova heurística ou modelo deve ser comparado contra baselines simples e reproduzíveis.
+
+### Baseline A — probabilidades puras
+
+```text
+9 maiores p(top1)  -> seco Top1
+5 menores p(top1)  -> duplo Top2+Top3
+```
+
+### Baseline B — otimizador probabilístico atual
+
+Solução que maximiza exatamente `P(acertos >= 13)` utilizando as probabilidades calibradas e todas as Hard Constraints.
+
+### Candidatos de aprimoramento
+
+Podem incluir:
+
+```text
+menor gap12
+maior entropia
+historical lift
+meta-modelo de top1_fail
+KNN/regime de concurso
+combinações dos sinais anteriores
+```
+
+As comparações devem reportar pelo menos:
+
+```text
+14 acertos
+13 acertos
+P(acertos >= 13)
+12 acertos
+P(acertos >= 12)
+média de acertos
+mediana de acertos
+Top1 capturados
+Top2 capturados
+Top3 capturados
+```
+
+O critério principal de promoção de uma estratégia continua sendo o desempenho **fora da amostra**, em walk-forward, para atingir pelo menos 13 acertos.
+
+---
+
+## Validação walk-forward
+
+Backtests e calibrações devem preservar a ordem temporal dos concursos.
+
+Para cada concurso `N`:
+
+```text
+treinar somente com concursos < N
+calibrar somente com concursos < N
+prever o concurso N
+montar a aposta do concurso N
+avaliar o resultado real do concurso N
+```
+
+Nenhuma informação do concurso avaliado pode participar do treinamento, calibração, seleção de hiperparâmetros ou construção de features que não estivessem disponíveis antes daquele concurso.
+
+---
+
+## Fronteira dos cinco duplos
+
+A telemetria deve tornar explícita a fronteira entre o último jogo escolhido para receber duplo e o primeiro jogo excluído.
+
+Exemplo:
+
+```text
+=== FRONTEIRA DOS DUPLOS ===
+Rank | Jogo      | pTop1 | FailRaw | FailAdj | Score
+1    | Jogo A    | .3592 | .6408   | .6621   | .6814
+2    | Jogo B    | .4102 | .5898   | .6034   | .6170
+3    | Jogo C    | .4231 | .5769   | .5901   | .6018
+4    | Jogo D    | .4310 | .5690   | .5742   | .5845
+5    | Jogo E    | .4473 | .5527   | .5680   | .5762
+-----------------------------------------------------
+6    | Jogo F    | .4571 | .5429   | .5661   | .5739
+```
+
+Deve ser mostrado, quando possível:
+
+```text
+margem entre 5º e 6º candidato
+delta de P(acertos >= 13) ao trocar 5º por 6º
+classificação da decisão: robusta ou frágil
+```
+
+Essa análise é especialmente importante quando os candidatos próximos ao cutoff apresentam probabilidades muito semelhantes.
+
+---
+
+## Sensibilidade e robustez
+
+A solução final deve poder ser auditada quanto à sensibilidade a pequenas mudanças nas probabilidades.
+
+Testes recomendados:
+
+```text
+p(top1) ± pequenas perturbações
+p(top2) ± pequenas perturbações
+p(top3) ± pequenas perturbações
+```
+
+O objetivo é verificar se os mesmos cinco jogos continuam selecionados como duplos.
+
+Uma solução que muda com perturbações mínimas deve ser marcada como **instável** ou **frágil**, permitindo distinguir:
+
+```text
+decisão robusta
+decisão marginal
+decisão instável
+```
+
+A robustez pode ser usada como critério secundário, desde que não viole as Hard Constraints nem substitua `P(acertos >= 13)` como objetivo principal.
+
+---
+
 ## Princípio de otimização
 
 O objetivo do projeto **não é simplesmente maximizar a acurácia média das previsões individuais**.
@@ -310,6 +620,16 @@ P(acertos >= 13)
 ```
 
 A escolha de secos, duplos, distribuição de Top1/Top2/Top3 e aplicação das Soft Constraints deve ser avaliada à luz desse objetivo global, sempre subordinada às Hard Constraints.
+
+Sempre que possível, devem ser reportados separadamente:
+
+```text
+P(14 acertos)
+P(13 acertos)
+P(acertos >= 13)
+P(12 acertos)
+P(acertos >= 12)
+```
 
 ---
 
@@ -326,6 +646,8 @@ p(2)
 top1 / p(top1)
 top2 / p(top2)
 top3 / p(top3)
+gap12 / gap23 / gap13
+entropia
 tipo da marcação: seco ou duplo
 palpite escolhido
 motivo da escolha
@@ -340,7 +662,11 @@ score probabilístico do próximo concurso
 quantidade de Top1/Top2/Top3 selecionados
 posições das marcações Top1/Top2/Top3
 ganho marginal de cada duplo
+FailRaw
+FailAdjusted
 impacto estimado sobre P(acertos >= 13)
+fronteira entre 5º e 6º candidato a duplo
+sensibilidade da solução
 ```
 
 Ao final, deve ser exibido um resumo validando as Hard Constraints, incluindo:
@@ -357,6 +683,77 @@ Flamengo/RJ: regra satisfeita, quando aplicável
 ```
 
 Também devem ser exibidos os indicadores utilizados pela otimização para comparar soluções candidatas e justificar a escolha do palpite final.
+
+---
+
+## Validação independente das Hard Constraints
+
+Depois de o otimizador gerar a solução, as Hard Constraints devem ser recalculadas de forma independente a partir do palpite final.
+
+A execução deve falhar explicitamente se qualquer condição não for satisfeita:
+
+```text
+secos == 9
+duplos == 5
+triplos == 0
+top1 == 9
+top2 == 5
+top3 == 5
+total de marcações == 19
+vitória do Flamengo incluída, quando aplicável
+```
+
+Duplos válidos devem pertencer exclusivamente ao conjunto:
+
+```text
+1X
+12
+X2
+```
+
+---
+
+## Tratamento das Soft Constraints
+
+### Palmeiras/SP
+
+A preferência por excluir a vitória do Palmeiras deve ser quantitativa e subordinada à qualidade global da aposta.
+
+A solução sem vitória do Palmeiras deve ser favorecida quando a perda estimada em `P(acertos >= 13)` for pequena ou equivalente, mas a Soft Constraint não deve forçar uma solução substancialmente pior.
+
+### Runs de Top1
+
+A concentração de Top1 pode ser medida por indicadores como:
+
+```text
+maior_run_top1
+numero_de_runs_top1
+fragmentacao_top1
+```
+
+Esses indicadores devem atuar apenas como critérios secundários ou de desempate até que backtests walk-forward demonstrem ganho consistente no objetivo principal.
+
+---
+
+## Ordem recomendada de implementação
+
+Priorizar os aprimoramentos na seguinte sequência:
+
+```text
+1. Backtest da baseline: 5 menores p(top1) recebem Top2+Top3
+2. Comparação com o otimizador probabilístico atual
+3. Auditoria/calibração de top1/top2/top3 por faixa de probabilidade
+4. Features gap12/gap23/gap13 e entropia
+5. Meta-modelo P(top1_hit = 0)
+6. Comparação meta-modelo vs baselines em walk-forward
+7. Telemetria da fronteira 5º vs 6º candidato
+8. Sensitivity analysis e classificação de robustez
+9. KNN/regime de concurso
+10. Avaliação histórica das runs de Top1
+11. Ajuste quantitativo da Soft Constraint do Palmeiras
+```
+
+Nenhuma complexidade adicional deve ser promovida para a estratégia principal sem demonstrar ganho fora da amostra sobre baselines mais simples.
 
 ---
 
@@ -378,13 +775,7 @@ O pipeline usa apenas a biblioteca padrão do Python 3.10+:
 python main.py
 ```
 
-A execução valida os CSVs, ajusta uma calibração por temperatura em uma divisão
-cronológica do histórico e resolve a aposta por programação dinâmica. Para cada
-estado viável, o otimizador mantém a fronteira de Pareto das probabilidades de
-zero e uma falha; assim, a função final calculada é exatamente
-`P(14 acertos) + P(13 acertos)`, sob a hipótese explícita de independência entre
-os jogos. As preferências suaves são usadas somente para desempatar soluções
-com probabilidade equivalente, nunca para relaxar uma restrição obrigatória.
+A execução valida os CSVs, ajusta uma calibração por temperatura em uma divisão cronológica do histórico e resolve a aposta por programação dinâmica. Para cada estado viável, o otimizador mantém a fronteira de Pareto das probabilidades de zero e uma falha; assim, a função final calculada é exatamente `P(14 acertos) + P(13 acertos)`, sob a hipótese explícita de independência entre os jogos. As preferências suaves são usadas somente para desempatar soluções com probabilidade equivalente, nunca para relaxar uma restrição obrigatória.
 
 Os testes automatizados podem ser executados com:
 
