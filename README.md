@@ -31,7 +31,7 @@ top3_hit
 
 Em cada partida, exatamente uma dessas variáveis deve ser igual a `1`.
 
-6. Exibir telemetria suficiente para auditar probabilidades base/calibradas, rankings, `risk_rank`, gaps, entropia, secos, duplos, fronteira 5º/6º, evidência histórica, robustez, Hard/Soft Constraints e decomposição de `P(>=13)`.
+6. Exibir telemetria suficiente para auditar probabilidades base/calibradas, rankings, `risk_rank`, gaps, entropia, secos, duplos, fronteira 5º/6º, evidência histórica, impacto decisório, robustez, Hard/Soft Constraints e decomposição de `P(>=13)`.
 
 ---
 
@@ -324,15 +324,13 @@ Criar ECE específico por `risk_rank`:
 RiskRankECE = soma ponderada |observado - previsto|
 ```
 
-Como cada posição tende a ter a mesma quantidade de observações, a interpretação é simples.
-
 ## Brier por `risk_rank`
 
 Adicionar Brier Score para complementar o log-loss e evitar promoção baseada em uma única métrica probabilística.
 
 ---
 
-# Backtest real BASE vs RISK_RANK — prioridade máxima
+# Backtest real BASE vs RISK_RANK
 
 O ganho de `P(>=13)` calculado com probabilidades ajustadas é **estimado pelo próprio modelo**. Ele não prova sozinho ganho real.
 
@@ -343,8 +341,6 @@ A = probabilidades brutas
 B = + temperatura
 C = + temperatura + risk_rank
 ```
-
-Sem adicionar outras mudanças simultaneamente.
 
 Relatório mínimo:
 
@@ -375,8 +371,6 @@ A contribuição incremental do `risk_rank` deve ser medida nos resultados reais
 
 # Net13Gain
 
-Criar métrica explícita de migração para o objetivo principal.
-
 ```text
 Net13Gain =
   concursos que passaram de <13 para >=13
@@ -395,24 +389,13 @@ Reportar separadamente:
 14 -> <13
 ```
 
-Exemplo:
-
-```text
-BASE -> RISK_RANK
-<13 -> >=13 : 6
->=13 -> <13 : 2
-Net13Gain = +4
-```
-
 Essa métrica tem prioridade maior que pequenas diferenças de log-loss.
 
 ---
 
 # Matriz de transição de acertos
 
-Comparar os acertos concurso a concurso antes/depois do `risk_rank`.
-
-Exemplo estrutural:
+Comparar os acertos concurso a concurso antes/depois do componente histórico.
 
 ```text
 BASE\RISK | 10 | 11 | 12 | 13 | 14
@@ -423,7 +406,493 @@ BASE\RISK | 10 | 11 | 12 | 13 | 14
 14        | .. | .. | .. | .. | ..
 ```
 
-A matriz deve mostrar se o componente está principalmente recuperando `12->13`, melhorando `11->12`, ou apenas deslocando resultados sem ganho na cauda.
+A matriz deve mostrar se o componente está recuperando `12->13`, melhorando `11->12`, ou apenas deslocando resultados sem ganho na cauda.
+
+---
+
+# Impacto decisório — prioridade atual
+
+A partir do momento em que a calibração por `risk_rank` melhora log-loss, mas não demonstra ganho claro no bilhete, o foco passa a ser medir **quando o histórico realmente muda uma decisão** e se essa intervenção é benéfica.
+
+Separar obrigatoriamente três níveis:
+
+```text
+1. probabilidades mudaram
+2. ranking / top-5 mudou
+3. bilhete final mudou
+```
+
+Somente o terceiro nível pode alterar diretamente o número real de acertos daquele concurso.
+
+## TicketChangeRate
+
+```text
+TicketChangeRate =
+concursos em que o bilhete final do Challenger difere do Champion
+/
+concursos avaliados
+```
+
+Também calcular:
+
+```text
+Top1RankingChangeRate
+DoubleSetChangeRate
+FinalTicketChangeRate
+```
+
+## Funil de impacto
+
+Produzir um relatório sequencial:
+
+```text
+Concursos avaliados
+Probabilidades alteradas
+Algum ranking 1/X/2 alterado
+Top-5 de risco alterado
+Conjunto dos 5 duplos alterado
+Bilhete final alterado
+Acertos alterados
+13+ alterado
+```
+
+Esse funil deve permitir distinguir melhora de calibração de melhora operacional.
+
+## ConditionalImpact
+
+Avaliar o Challenger também **somente nos concursos em que o bilhete mudou**:
+
+```text
+n_changed_tickets
+mean_hits_champion_changed
+mean_hits_challenger_changed
+12plus_champion_changed
+12plus_challenger_changed
+13plus_champion_changed
+13plus_challenger_changed
+```
+
+A avaliação global continua obrigatória; `ConditionalImpact` é diagnóstico complementar.
+
+## DecisionNetGain
+
+```text
+DecisionNetGain =
+soma(acertos_challenger - acertos_champion)
+```
+
+calculada apenas nos concursos com bilhete diferente.
+
+Também reportar:
+
+```text
+DecisionWinRate
+DecisionLossRate
+DecisionTieRate
+```
+
+## NetPrizeTierGain
+
+Além de `Net13Gain`, registrar migrações de faixa:
+
+```text
+<12 -> 12
+<13 -> 13
+<14 -> 14
+13 -> 12
+14 -> 13
+14 -> <13
+```
+
+O objetivo principal continua sendo `>=13`, mas a decomposição ajuda a entender onde as intervenções ganham ou perdem valor.
+
+---
+
+# RISK_CALIBRATION vs RISK_SELECTOR
+
+O histórico pode agregar valor em dois lugares diferentes e eles devem ser testados separadamente.
+
+## `RISK_CALIBRATION`
+
+```text
+probabilidades -> ajuste histórico por risk_rank -> ranking -> otimizador
+```
+
+Pode alterar `p(1)`, `p(X)`, `p(2)` e eventualmente Top1/Top2/Top3.
+
+## `RISK_SELECTOR_ONLY`
+
+```text
+TEMP
+-> p(1), p(X), p(2) preservadas
+-> Top1/Top2/Top3 preservados
+-> histórico/risk_rank atua somente na escolha dos 5 duplos
+-> otimizador 9-5-5
+```
+
+Nesse modo:
+
+```text
+não alterar p(1/X/2)
+não alterar Top1/Top2/Top3
+histórico só influencia a decisão estrutural de quais jogos recebem duplo
+```
+
+## Ablation obrigatória
+
+Comparar:
+
+```text
+A = TEMP_ONLY
+B = TEMP + RISK_CALIBRATION
+C = TEMP + RISK_SELECTOR_ONLY
+D = TEMP + RISK_CALIBRATION + RISK_SELECTOR
+```
+
+Métricas mínimas:
+
+```text
+>=13
+>=12
+Net13Gain
+mean_hits
+TicketChangeRate
+DecisionNetGain
+DecisionWinRate
+RecoveryRate
+CutoffDecisionAccuracy
+```
+
+Hipótese central:
+
+> o `risk_rank` pode ter pouco valor como recalibrador de probabilidades, mas valor relevante como seletor de decisões marginais.
+
+---
+
+# RISK_RANK_ONLY baseline
+
+Manter a baseline ordinal mais simples possível:
+
+```text
+risk_rank 1..5  -> duplo Top2+Top3
+risk_rank 6..14 -> seco Top1
+```
+
+Ela deve ser comparada ao `RISK_SELECTOR_ONLY` para medir quanto ganho vem apenas da ordenação relativa e quanto depende de histórico adicional.
+
+---
+
+# `HistoricalRiskScore`
+
+Separar conceitualmente:
+
+```text
+pTop1_rank = posição atual do jogo segundo p(top1)
+HistoricalRiskScore = evidência histórica de vulnerabilidade do Top1
+```
+
+Exemplo:
+
+```text
+HistoricalRiskScore =
+    w1 * historical_fail_by_risk_rank
+  + w2 * RiskRankStability
+  + w3 * cutoff_history
+  + w4 * ranking_type_history
+  + w5 * recoverable_history
+```
+
+O score pode ser usado apenas para ordenar candidatos da zona cinzenta, sem ser convertido em nova probabilidade.
+
+Pesos somente por walk-forward.
+
+---
+
+# Zona cinzenta adaptativa
+
+Não assumir obrigatoriamente uma zona fixa 4..8.
+
+Testar pelo menos duas definições:
+
+```text
+ORDINAL:
+risk_rank 4..8
+
+DISTANCE_TO_CUTOFF:
+|pTop1_i - pTop1_cutoff| <= threshold
+```
+
+O threshold deve ser escolhido somente no treino/validação.
+
+A zona cinzenta deve concentrar a capacidade do histórico; núcleo de duplos e núcleo de secos muito robustos não devem ser reabertos sem evidência excepcional.
+
+---
+
+# Cutoff histórico 5º vs 6º
+
+Para cada concurso histórico, armazenar:
+
+```text
+candidate_rank5
+candidate_rank6
+pTop1_rank5
+pTop1_rank6
+margin_56
+gap12_5
+gap12_6
+entropy_5
+entropy_6
+ranking_type_5
+ranking_type_6
+top1_hit_rank5
+top1_hit_rank6
+```
+
+Classificar:
+
+```text
+A = rank5 fail / rank6 hit   -> rank5 correto
+B = rank5 hit / rank6 fail   -> rank6 deveria entrar
+C = ambos fail               -> ambos úteis
+D = ambos hit                -> ambos desperdício
+```
+
+## CutoffDecisionAccuracy
+
+Calcular somente nos casos A/B:
+
+```text
+CutoffDecisionAccuracy = decisões corretas / casos discriminantes
+```
+
+Não diluir com C/D.
+
+---
+
+# CutoffDecisionDataset
+
+Criar dataset específico das decisões próximas ao cutoff:
+
+```text
+contest_id
+candidate_rank5
+candidate_rank6
+candidate_rank7
+margin_56
+margin_57
+gap12_rank5/6/7
+entropy_rank5/6/7
+ranking_type_rank5/6/7
+historical_fail_rank5/6/7
+RiskRankStability_rank5/6/7
+HistoricalConfidence_rank5/6/7
+resultado_real_rank5/6/7
+```
+
+Targets possíveis:
+
+```text
+best_double_candidate
+KEEP_5 vs SWAP_6
+KEEP_5 vs SWAP_7
+```
+
+---
+
+# SwapOpportunityRate
+
+Medir quantas oportunidades reais de melhora existiam na fronteira.
+
+```text
+SwapOpportunityRate =
+concursos em que trocar um duplo de cutoff por um seco da zona cinzenta aumentaria acertos
+/
+concursos avaliados
+```
+
+E:
+
+```text
+SwapCapturedRate =
+oportunidades de swap corretamente capturadas pelo seletor
+/
+oportunidades de swap existentes
+```
+
+Separar análise 5->6, 5->7 e demais swaps permitidos.
+
+---
+
+# MinimalRecoverySwap
+
+Para cada concurso abaixo de 13, especialmente os de 12 acertos, identificar a menor alteração válida capaz de melhorar o resultado.
+
+Registrar:
+
+```text
+n_swaps_minimos
+duplo_que_sai
+seco_que_entra
+risk_rank de ambos
+margin
+gap_rank
+entropy_rank
+ranking_type
+HistoricalRiskScore
+HistoricalConfidence
+```
+
+Priorizar casos:
+
+```text
+12 -> 13
+12 -> 14
+11 -> 13
+```
+
+---
+
+# RECOVERY_SELECTOR
+
+Criar um Challenger especializado em concursos `RECOVERABLE`.
+
+Treino retrospectivo permitido:
+
+```text
+modelo < 13
+oracle_9_5_5 >= 13
+```
+
+Objetivo:
+
+```text
+identificar qual decisão estrutural de duplo impediu 13+
+```
+
+O modelo só pode usar features disponíveis ex ante no momento do concurso.
+
+## RecoveryPrecision
+
+```text
+RecoveryPrecision =
+trocas sugeridas que realmente aumentariam acertos
+/
+trocas sugeridas
+```
+
+## RecoveryRecall
+
+```text
+RecoveryRecall =
+oportunidades recuperáveis capturadas
+/
+oportunidades recuperáveis totais
+```
+
+Essas métricas complementam `RecoveryRate`.
+
+---
+
+# DoNoHarmGate
+
+Como o histórico pode alterar um bilhete que já é probabilisticamente forte, qualquer intervenção deve ter um gate explícito.
+
+Exemplo conceitual:
+
+```text
+swap permitido somente se:
+HistoricalConfidence >= threshold_confidence
+AND CutoffDecisionScore >= threshold_decision
+AND Delta_P13 >= -tolerancia
+```
+
+Os thresholds e a tolerância devem ser aprendidos/definidos apenas em validação.
+
+O gate não pode ser usado para justificar intervenção com base no concurso alvo.
+
+## Penalidade por intervenção
+
+Testar seletor conservador que prefira **não alterar** o Champion quando a evidência histórica for fraca.
+
+Pode-se adicionar custo de intervenção:
+
+```text
+DecisionScore_final = DecisionScore_historico - lambda * intervention_cost
+```
+
+`lambda` somente por walk-forward.
+
+---
+
+# Consenso para swap
+
+Para trocar rank5 por rank6/rank7, permitir votos independentes:
+
+```text
+gap12
+a entropia
+historical_fail
+cutoff_history
+pairwise_model
+HistoricalConfidence
+RECOVERY_SELECTOR
+```
+
+Exemplo:
+
+```text
+swap se >= k votos
+```
+
+O valor de `k` deve ser validado fora da amostra.
+
+Manter telemetria de cada voto para auditoria.
+
+---
+
+# Pareto da zona cinzenta
+
+Antes de aplicar score ponderado, testar dominância de Pareto.
+
+Um candidato pode ser preferido quando domina outro em vários sinais relevantes, por exemplo:
+
+```text
+menor pTop1
+menor gap12
+maior entropy
+maior historical_fail
+maior HistoricalConfidence
+```
+
+Se nenhum domina, ambos permanecem no Pareto front e o desempate pode ser feito pelo histórico/pairwise.
+
+Essa abordagem reduz dependência de pesos arbitrários.
+
+---
+
+# Decision Stability
+
+Além de `Stability@5`, medir estabilidade da decisão marginal:
+
+```text
+CutoffStability = frequência com que o mesmo candidato permanece na vaga de cutoff sob perturbações plausíveis
+```
+
+Também registrar, por candidato da zona cinzenta:
+
+```text
+SelectionFrequency
+```
+
+em bootstrap/Monte Carlo de probabilidades.
+
+Exemplo:
+
+```text
+J6 78%
+J3 49%
+J8 31%
+```
 
 ---
 
@@ -447,87 +916,36 @@ Pergunta principal:
 
 # RISK_RANK_FREE vs RISK_RANK_PRESERVE_ORDER
 
-Testar duas versões explicitamente:
+Testar:
 
 ```text
 RISK_RANK_FREE
 - pode alterar a ordem 1/X/2
 
 RISK_RANK_PRESERVE_ORDER
-- ajusta a confiança
+- ajusta confiança
 - preserva Top1/Top2/Top3 originais
 ```
 
-Comparar em walk-forward:
+Comparar:
 
 ```text
 >=13
 >=12
 Net13Gain
+TicketChangeRate
+DecisionNetGain
 mean_hits
 RankingChangeImpact
 LogLoss
 Brier
 ```
 
-Esse experimento é central para avaliar uma estratégia menos dependente das magnitudes sem permitir que pequenos ajustes históricos troquem a identidade dos ranks de forma desnecessária.
-
----
-
-# Cutoff histórico 5º vs 6º
-
-A fronteira entre `risk_rank=5` e `risk_rank=6` é uma prioridade especial.
-
-Para cada concurso histórico, armazenar:
-
-```text
-candidate_rank5
-candidate_rank6
-pTop1_rank5
-pTop1_rank6
-margin_56
-gap12_5
-gap12_6
-entropy_5
-entropy_6
-ranking_type_5
-ranking_type_6
-top1_hit_rank5
-top1_hit_rank6
-```
-
-Classificar em quatro estados:
-
-```text
-A = rank5 fail / rank6 hit   -> rank5 correto
-B = rank5 hit / rank6 fail   -> rank6 deveria entrar
-C = ambos fail               -> ambos úteis
-D = ambos hit                -> ambos desperdício
-```
-
-## CutoffDecisionAccuracy
-
-Calcular somente nos casos informativos A/B:
-
-```text
-CutoffDecisionAccuracy = decisões corretas / casos em que apenas um dos dois falhou
-```
-
-Não diluir essa métrica com casos C/D, nos quais não existe vencedor inequívoco.
-
-Também calcular:
-
-```text
-P(rank6 deveria substituir rank5 | margin_56 < 0.01)
-P(rank6 deveria substituir rank5 | 0.01 <= margin_56 < 0.02)
-P(rank6 deveria substituir rank5 | margin_56 >= 0.02)
-```
-
 ---
 
 # Oracle específico do ranking de risco
 
-Criar diagnóstico retrospectivo para responder:
+Diagnóstico retrospectivo:
 
 ```text
 quantos concursos RECOVERABLE exigiam sair do top-5 risk_rank?
@@ -535,7 +953,7 @@ quantas falhas estavam em risk_rank 6/7/8?
 quantas eram recuperáveis com uma única troca?
 ```
 
-O objetivo é separar:
+Separar:
 
 ```text
 limitação do ranking de risco
@@ -543,13 +961,13 @@ vs
 limitação estrutural dos 5 duplos
 ```
 
-Esse oracle nunca pode ser usado na previsão do próximo concurso.
+Nunca usar oracle para prever o próximo concurso.
 
 ---
 
 # Pairwise 5 vs 6
 
-Treinar um Challenger especializado apenas na decisão crítica do cutoff.
+Treinar Challenger especializado na decisão crítica do cutoff.
 
 Entrada:
 
@@ -574,23 +992,21 @@ KEEP_5
 SWAP_6
 ```
 
-Métrica principal:
+Métricas:
 
 ```text
 CutoffDecisionAccuracy
+DecisionNetGain
+Net13Gain
+RecoveryPrecision
+RecoveryRecall
 ```
-
-Também medir impacto real em `>=13` e `Net13Gain`.
 
 ---
 
-# Modelo da zona cinzenta 4..8
+# Modelo da zona cinzenta
 
-Somente depois de validar o pairwise 5/6, expandir para:
-
-```text
-risk_rank 4..8
-```
+Somente depois de validar o pairwise 5/6, expandir para candidatos próximos ao cutoff.
 
 Target:
 
@@ -609,18 +1025,15 @@ posição
 CalibrationErrorByRiskRank
 RiskRankStability
 HistoricalConfidence
-HistoricalScore
-HistoricalVote
+HistoricalRiskScore
 regime do concurso
 ```
 
-Preferir features ordinais/categóricas quando apresentarem desempenho equivalente ou superior às magnitudes contínuas.
+Preferir features ordinais/categóricas quando tiverem desempenho equivalente ou superior às magnitudes contínuas.
 
 ---
 
 # HistoricalConfidence operacional
-
-Transformar a confiança histórica em variável utilizável pelo seletor.
 
 ```text
 HistoricalConfidence = f(
@@ -631,64 +1044,13 @@ HistoricalConfidence = f(
 )
 ```
 
-A intensidade do ajuste pode ser:
+Pode modular a intensidade de intervenção:
 
 ```text
 adjustment_strength = base_adjustment * HistoricalConfidence
 ```
 
-Os pesos concretos precisam ser aprendidos exclusivamente em validação walk-forward.
-
----
-
-# Confidence-aware cutoff
-
-Na fronteira 5º/6º, a confiança histórica pode modular o desempate.
-
-Exemplo conceitual:
-
-```text
-rank5 HIGH + rank6 MEDIUM -> maior resistência ao swap
-rank5 LOW  + rank6 HIGH   -> maior abertura ao swap
-```
-
-Isso é Soft/Challenger, nunca Hard Constraint.
-
----
-
-# Interações futuras do `risk_rank`
-
-Somente depois de validar o componente isolado:
-
-## `risk_rank` + tipo de ranking
-
-```text
-risk_rank=3 + 1>X>2
-risk_rank=3 + 1>2>X
-risk_rank=3 + 2>X>1
-```
-
-Exigir `minimum_sample`, shrinkage e walk-forward.
-
-## `risk_rank` + gap12 ordinal
-
-Usar `rank_gap12`, quantis ou buckets históricos.
-
-## `risk_rank` + entropia ordinal
-
-Usar `entropy_rank` em vez de depender diretamente da magnitude.
-
-## Múltiplos rankings de risco
-
-```text
-risk_rank_prob
-risk_rank_gap
-risk_rank_entropy
-risk_rank_history
-risk_rank_consensus
-```
-
-Comparar qual ranking melhor antecipa `Top1_fail` fora da amostra.
+Pesos somente por walk-forward.
 
 ---
 
@@ -706,14 +1068,14 @@ Usa probabilidades apenas para formar Top1/Top2/Top3 e posições ordinais.
 
 ## `RISK_RANK_ONLY`
 
-Baseline simples:
-
 ```text
 risk_rank 1..5  -> duplo Top2+Top3
 risk_rank 6..14 -> seco Top1
 ```
 
-Esse baseline deve ser medido explicitamente.
+## `RISK_SELECTOR_ONLY`
+
+Preserva probabilidades e ranking concreto, usando o histórico somente para decidir os cinco jogos que recebem duplo.
 
 ## `HISTORICAL_ONLY`
 
@@ -728,8 +1090,7 @@ risk_rank
 rank_gap12
 rank_gap13
 rank_entropy
-HistoricalScore
-HistoricalVote
+HistoricalRiskScore
 HistoricalConfidence
 ```
 
@@ -819,11 +1180,11 @@ zona_cinzenta
 núcleo_seco
 ```
 
-Filosofia inicial:
+Filosofia:
 
 ```text
-probabilidade / estrutura -> define o núcleo
-histórico                 -> resolve a zona cinzenta
+probabilidade / estrutura -> define núcleo
+histórico                 -> resolve zona cinzenta
 ```
 
 ---
@@ -831,8 +1192,6 @@ histórico                 -> resolve a zona cinzenta
 # Oracle histórico 9-5-5
 
 Implementar `oracle_9_5_5` exclusivamente para diagnóstico retrospectivo.
-
-Classificação:
 
 ```text
 SUCCESS
@@ -848,7 +1207,7 @@ UNRECOVERABLE
 RecoveryRate = SUCCESS / (SUCCESS + RECOVERABLE)
 ```
 
-O oracle nunca pode ser usado para prever o próximo concurso.
+Nunca usar oracle para prever o próximo concurso.
 
 ---
 
@@ -862,14 +1221,14 @@ Para concursos com exatamente 12 acertos, identificar a menor alteração necess
 % recuperável com 3+ trocas
 ```
 
-Criar dataset específico quando:
+Criar dataset quando:
 
 ```text
 acertos_modelo = 12
 acertos_oracle >= 13
 ```
 
-Registrar duplo que deveria sair, seco que deveria entrar, `risk_rank`, `margin_56`, ranking type, gap/entropia ordinal, HistoricalScore, HistoricalVote e regime.
+Registrar duplo que deveria sair, seco que deveria entrar, `risk_rank`, margin, ranking type, gap/entropia ordinal, HistoricalRiskScore e HistoricalConfidence.
 
 ---
 
@@ -889,8 +1248,6 @@ maximizar CoverageFail
 minimizar DoubleWasteRate
 ```
 
-O objetivo principal continua sendo `>=13`.
-
 ---
 
 # Fronteira 5º vs 6º
@@ -909,18 +1266,19 @@ P13+ após troca
 Delta absoluto
 Delta relativo
 Margem pTop1
-HistoricalScore 5º/6º
-HistoricalVote 5º/6º
+HistoricalRiskScore 5º/6º
 HistoricalConfidence 5º/6º
 CutoffDecision signal
+DoNoHarmGate status
 ```
 
-Separar sempre:
+Separar:
 
 ```text
 Fronteira probabilística
 Evidência histórica
 Robustez no objetivo
+Impacto decisório
 ```
 
 ---
@@ -943,25 +1301,23 @@ P(>=12)
 
 Sob hipótese de independência entre jogos, a distribuição pode ser calculada exatamente por programação dinâmica / Poisson-binomial.
 
-**Importante:** `P(>=13)` calculado com probabilidades ajustadas é uma estimativa interna. Promoção de estratégia depende do desempenho real walk-forward.
+**Importante:** `P(>=13)` calculado com probabilidades ajustadas é estimativa interna. Promoção depende do desempenho real walk-forward.
 
 ---
 
 # Matriz de trocas
 
 ```text
-Sai | Entra | Delta P13+ | Delta HistoricalScore | Delta Consensus
+Sai | Entra | Delta P13+ | Delta HistoricalRiskScore | Delta Consensus | Gate
 ```
 
-A matriz permite visualizar a geometria completa da solução e a zona cinzenta real.
+A matriz deve destacar oportunidades de swap da zona cinzenta e registrar se a intervenção seria permitida pelo `DoNoHarmGate`.
 
 ---
 
 # Robustez
 
 ## Stability@5
-
-Perturbar probabilidades, renormalizar e rerodar o seletor.
 
 ```text
 Stability@5 = persistência média dos 5 duplos
@@ -983,7 +1339,9 @@ T = 1.20
 T = 1.50
 ```
 
-Sem alterar automaticamente a temperatura implantada.
+## Decision Stability
+
+Medir `CutoffStability` e frequência de seleção dos candidatos da zona cinzenta sob perturbações plausíveis.
 
 ---
 
@@ -995,7 +1353,8 @@ Fluxo obrigatório:
 treina até concurso N-1
 calibra usando apenas dados <= N-1
 calcula risk_rank/estatísticas usando apenas dados permitidos
-calcula HistoricalScore somente com concursos <= N-1
+calcula HistoricalRiskScore somente com concursos <= N-1
+ajusta thresholds/gates somente com dados <= N-1
 busca KNN somente em concursos <= N-1
 prevê concurso N
 monta aposta N
@@ -1003,7 +1362,7 @@ avalia resultado real N
 avança para N+1
 ```
 
-Nenhuma estatística histórica pode incorporar direta ou indiretamente o resultado do concurso avaliado.
+Nenhuma estatística histórica, threshold de swap, gate, score ou modelo de recuperação pode incorporar direta ou indiretamente o resultado do concurso avaliado.
 
 ---
 
@@ -1024,58 +1383,56 @@ Uma estratégia só é robusta se o ganho não depender de um único período.
 
 # Bootstrap de 13+
 
-Como 13+ é raro, estimar incerteza no nível de concurso:
-
 ```text
 hit_rate_13plus = ...
 IC95% = [... ; ...]
 ```
 
-Também aplicar bootstrap ao **delta de hit_rate_13plus entre Champion e Challenger** sempre que possível.
+Também aplicar bootstrap ao delta de `hit_rate_13plus`, `Net13Gain` e, quando houver amostra suficiente, `DecisionNetGain` entre Champion e Challenger.
 
 ---
 
-# Promotion Gate do `risk_rank`
+# Promotion Gate
 
-O componente só deve continuar implantado quando cumprir critérios fora da amostra.
-
-Prioridade:
+Hierarquia para promover qualquer intervenção histórica/seletor:
 
 ```text
 1. hit_rate_13plus melhora ou fica estatisticamente equivalente
 2. Net13Gain >= 0 e preferencialmente > 0
 3. hit_rate_12plus não piora materialmente
-4. ganho aparece em diferentes períodos
-5. RiskRankPrecision@5 / Recall@5 apresentam sinal útil
-6. CutoffDecisionAccuracy apresenta sinal útil
-7. RankingChangeImpact não é negativo de forma sistemática
-8. Brier / ECE / LogLoss não pioram materialmente
+4. DecisionNetGain >= 0
+5. DecisionWinRate > DecisionLossRate quando houver amostra suficiente
+6. RecoveryRate / RecoveryPrecision / RecoveryRecall apresentam sinal útil
+7. CutoffDecisionAccuracy apresenta sinal útil
+8. TicketChangeRate não é alto sem benefício correspondente
+9. estabilidade por período
+10. Brier / ECE / LogLoss não pioram materialmente
 ```
 
-Melhorar log-loss isoladamente **não é suficiente**.
+Melhorar log-loss isoladamente não é suficiente.
 
 ---
 
 # Ablation study
 
-Comparar progressivamente:
+Comparar explicitamente:
 
 ```text
 A - probabilidades brutas
-B - + temperatura
-C - + risk_rank
+B - TEMP_ONLY
+C - TEMP + RISK_CALIBRATION
 D - RISK_RANK_PRESERVE_ORDER
 E - RISK_RANK_FREE
-F - + shrinkage
-G - + isotonic
-H - + confidence-aware adjustment
-I - + pairwise 5/6
-J - + modelo zona 4..8
-K - + ranking_type / gap / entropia ordinal
-L - + HistoricalVote
-M - + KNN histórico
-N - + RECOVERABLE / 12->13
-O - + consenso
+F - RISK_RANK_ONLY
+G - RISK_SELECTOR_ONLY
+H - RISK_CALIBRATION + RISK_SELECTOR
+I - + HistoricalRiskScore
+J - + CutoffDecisionDataset / pairwise 5-6
+K - + RECOVERY_SELECTOR
+L - + DoNoHarmGate
+M - + consenso de swap
+N - + Pareto gray zone
+O - + KNN histórico
 P - + Soft Constraint Palmeiras
 Q - modelo completo
 ```
@@ -1084,21 +1441,29 @@ Relatório mínimo:
 
 ```text
 Modelo
-LogLoss
-Brier
-RiskRankECE
-14
+Concursos
 >=13
 >=12
 Net13Gain
 Média
+TicketChangeRate
+DoubleSetChangeRate
+DecisionNetGain
+DecisionWinRate
+DecisionLossRate
 RecoveryRate
+RecoveryPrecision
+RecoveryRecall
 Precision@5
 Recall@5
 RiskRankPrecision@5
 RiskRankRecall@5
 CutoffDecisionAccuracy
+SwapOpportunityRate
+SwapCapturedRate
 Stability@5
+LogLoss
+Brier
 ```
 
 ---
@@ -1114,18 +1479,20 @@ Challengers:
 
 ```text
 RISK_RANK_ONLY
+RISK_CALIBRATION
+RISK_SELECTOR_ONLY
+RISK_CALIBRATION_PLUS_SELECTOR
 RISK_RANK_PRESERVE_ORDER
 RISK_RANK_FREE
-RISK_RANK_SHRINKAGE
-RISK_RANK_ISOTONIC
-RISK_RANK_CONFIDENCE_AWARE
 PAIRWISE_5_6
 PAIRWISE_GRAY_ZONE
-HISTORICAL_ONLY
+RECOVERY_SELECTOR
+HISTORY_DECISION_ONLY
 HYBRID_ORDINAL
-HYBRID_HISTORY_ADAPTIVE
+DO_NO_HARM_HISTORY
+PARETO_GRAY_ZONE
+CONSENSUS_SWAP
 KNN_HISTORY
-CONSENSUS_HISTORY
 ```
 
 Promoção somente por walk-forward.
@@ -1138,14 +1505,17 @@ Promoção somente por walk-forward.
 1. hit_rate_13plus
 2. Net13Gain
 3. hit_rate_12plus
-4. RecoveryRate
-5. Precision@5 / Recall@5 / CoverageFail
-6. RiskRankPrecision@5 / RiskRankRecall@5
-7. CutoffDecisionAccuracy
-8. mean_hits
-9. robustez / Stability@5
-10. Agreement@5 / dependência probabilística
-11. Brier / RiskRankECE / LogLoss
+4. DecisionNetGain
+5. RecoveryRate
+6. RecoveryPrecision / RecoveryRecall
+7. Precision@5 / Recall@5 / CoverageFail
+8. CutoffDecisionAccuracy
+9. SwapCapturedRate
+10. RiskRankPrecision@5 / RiskRankRecall@5
+11. mean_hits
+12. TicketChangeRate / DecisionStability
+13. robustez / Stability@5
+14. Brier / RiskRankECE / LogLoss
 ```
 
 O produto final é a aposta completa, não o estimador probabilístico isolado.
@@ -1160,14 +1530,15 @@ Critérios:
 
 - walk-forward estrito;
 - amostra suficiente;
-- melhoria em `>=13`;
+- melhoria em `>=13` ou equivalência com ganho estrutural comprovado;
 - `Net13Gain` não negativo;
+- `DecisionNetGain` não negativo;
 - ausência de deterioração material em `>=12`;
 - estabilidade por período;
 - resultado não dependente de poucos concursos extremos;
 - bootstrap/IC compatível com ganho plausível;
-- shrinkage quando necessário;
-- nenhuma informação futura nas features/calibrações.
+- penalidade por intervenção quando apropriado;
+- nenhuma informação futura em features, gates, thresholds ou calibrações.
 
 ---
 
@@ -1191,6 +1562,24 @@ RiskRankECE
 Rank | n | pTop1 previsto | hit observado | fail observado | erro calibração | IC95% | estabilidade | confiança | lift
 ```
 
+## Impacto decisório
+
+```text
+Concursos avaliados
+Probabilidades alteradas
+Rankings alterados
+Top-5 alterados
+Conjuntos de duplos alterados
+Bilhetes finais alterados
+TicketChangeRate
+DoubleSetChangeRate
+DecisionWinRate
+DecisionLossRate
+DecisionTieRate
+DecisionNetGain
+Net13Gain
+```
+
 ## Por partida
 
 ```text
@@ -1206,9 +1595,9 @@ gap13
 entropy
 rank_gap12
 rank_entropy
-HistoricalScore
-HistoricalVote
+HistoricalRiskScore
 HistoricalConfidence
+CutoffDecisionScore
 grupo: núcleo_duplo / zona_cinzenta / núcleo_seco
 tipo: seco ou duplo
 palpite
@@ -1216,20 +1605,20 @@ cobertura
 motivo da escolha
 ```
 
-## Backtest `risk_rank`
+## Backtest comparativo
 
 ```text
-BASE vs TEMP vs TEMP+RISK_RANK
-14
+TEMP_ONLY
+RISK_CALIBRATION
+RISK_SELECTOR_ONLY
+RISK_CALIBRATION + RISK_SELECTOR
+
 >=13
 >=12
 Net13Gain
-12->13
-13->12
-Precision@5
-Recall@5
-RiskRankPrecision@5
-RiskRankRecall@5
+TicketChangeRate
+DecisionNetGain
+RecoveryRate
 CutoffDecisionAccuracy
 ```
 
@@ -1238,13 +1627,16 @@ CutoffDecisionAccuracy
 ```text
 5º candidato
 6º candidato
+7º candidato
 margin_56
+margin_57
 P13+ original/após troca
 delta absoluto/relativo
-HistoricalScore
-HistoricalVote
+HistoricalRiskScore
 HistoricalConfidence
-CutoffDecision signal
+CutoffDecisionScore
+DoNoHarmGate
+SwapOpportunity
 fronteira probabilística
 evidência histórica
 robustez no objetivo
@@ -1306,7 +1698,7 @@ Responsabilidades:
 - `data/concursos_anteriores.csv`: treinamento, calibração e backtest;
 - `data/proximo_concurso.csv`: concurso alvo;
 - `scripts/preprocess_data.py`: leitura, validação e features;
-- `scripts/train_model.py`: treinamento, calibração, `risk_rank`, histórico e avaliação walk-forward;
+- `scripts/train_model.py`: treinamento, calibração, `risk_rank`, histórico, seletores e avaliação walk-forward;
 - `scripts/predict_results.py`: probabilidades, rankings, seletores, evidência histórica, otimização 9-5-5 e palpite final;
 - `output/predictions.csv`: saída auditável.
 
@@ -1353,61 +1745,62 @@ Testes:
 python -m unittest discover -v
 ```
 
-Durante o treinamento, o bloco cronologicamente posterior (20% dos concursos)
-também é usado para comparar, concurso a concurso, os bilhetes completos
-`BASE` e `RISK_RANK`. A promoção do ajuste por `risk_rank` exige
-simultaneamente ganho de log-loss, ausência de redução no total real de 13+ e
-`Net13Gain >= 0`. O relatório inclui 12+, médias de acertos e a matriz esparsa
-de transições (`acertos BASE -> acertos RISK_RANK`); todos os bilhetes dessa
-avaliação passam pelo mesmo otimizador e pelo mesmo validador de Hard
-Constraints usados na previsão final.
+Durante o treinamento, avaliações de bilhetes devem sempre usar o mesmo otimizador e o mesmo validador de Hard Constraints usados na previsão final. Comparações Champion/Challenger devem ser concurso a concurso e cronologicamente honestas.
 
 ---
 
 # Ordem recomendada de implementação
 
 ```text
-1. backtest real BASE vs TEMP vs TEMP+RISK_RANK
-2. Net13Gain
-3. matriz de transição de acertos
-4. RiskRankPrecision@5 / RiskRankRecall@5
-5. curva cumulativa Recall@k
-6. Cutoff 5/6 nos quatro estados A/B/C/D
-7. CutoffDecisionAccuracy
-8. CalibrationErrorByRiskRank
-9. RiskRankECE + Brier
-10. RISK_RANK_PRESERVE_ORDER vs RISK_RANK_FREE
-11. RankingChangeImpact
-12. isotonic risk_rank como Challenger
-13. shrinkage / HistoricalConfidence operacional
-14. pairwise 5 vs 6
-15. modelo da zona 4..8
-16. risk_rank + ranking_type / gap / entropia ordinal
-17. oracle específico do risk_rank
-18. oracle_9_5_5 / RECOVERABLE / 12->13
-19. HistoricalVote / KNN histórico
-20. matriz de trocas
-21. Stability@5 / stress tests
-22. bootstrap do delta de >=13
-23. Champion / Challenger
-24. ablation study contínuo
+1. TicketChangeRate / DoubleSetChangeRate / Top1RankingChangeRate
+2. funil de impacto decisório
+3. ConditionalImpact
+4. DecisionNetGain / DecisionWinRate / DecisionLossRate
+5. TEMP_ONLY vs RISK_CALIBRATION vs RISK_SELECTOR_ONLY
+6. RISK_RANK_ONLY baseline
+7. CutoffDecisionDataset
+8. CutoffDecisionAccuracy
+9. SwapOpportunityRate / SwapCapturedRate
+10. MinimalRecoverySwap
+11. RECOVERY_SELECTOR
+12. RecoveryPrecision / RecoveryRecall
+13. DoNoHarmGate / penalidade por intervenção
+14. consenso para swap
+15. Pareto da zona cinzenta
+16. Decision Stability / CutoffStability
+17. pairwise 5 vs 6
+18. modelo da zona cinzenta adaptativa
+19. RISK_RANK_PRESERVE_ORDER vs FREE
+20. HistoricalRiskScore / HistoricalConfidence
+21. oracle específico do risk_rank
+22. oracle_9_5_5 / RECOVERABLE / 12->13
+23. KNN histórico
+24. matriz de trocas
+25. Stability@5 / stress tests
+26. bootstrap do delta de >=13 e DecisionNetGain
+27. Champion / Challenger
+28. ablation study contínuo
 ```
 
-A prioridade imediata é **provar se o `risk_rank` aumenta de fato a taxa real de 13+**, e não apenas o log-loss ou o `P13+` estimado pelo próprio modelo.
+A prioridade imediata é **descobrir se o histórico agrega valor quando atua como seletor de decisões marginais, e não apenas como recalibrador das probabilidades**.
 
 ---
 
 # Perguntas experimentais centrais
 
-> **O `risk_rank` gera `Net13Gain` positivo em walk-forward?**
+> **Quantas vezes o histórico realmente muda o bilhete?**
 
-> **Os cinco primeiros `risk_rank` capturam uma parcela suficientemente alta das falhas Top1 para justificar a estrutura de cinco duplos?**
+> **Quando muda, a decisão melhora mais concursos do que piora?**
 
-> **A decisão crítica entre o 5º e o 6º candidato pode ser melhorada historicamente sem overfitting?**
+> **`RISK_SELECTOR_ONLY` supera `RISK_CALIBRATION` em `Net13Gain`, `DecisionNetGain` e recuperação 12->13?**
 
-> **Permitir mudanças de Top1/Top2/Top3 ajuda mais do que prejudica, ou é melhor preservar a ordem e ajustar apenas confiança?**
+> **A decisão crítica entre o 5º, 6º e 7º candidatos pode ser melhorada historicamente sem overfitting?**
 
-> **A melhora do `risk_rank` persiste em diferentes períodos e no bootstrap do delta de 13+?**
+> **Quantas oportunidades reais de swap existem e quantas o seletor consegue capturar?**
+
+> **Um `DoNoHarmGate` conservador melhora o saldo das intervenções históricas?**
+
+> **Os concursos `RECOVERABLE` revelam padrões úteis para transformar 12 em 13?**
 
 > **Quanto da qualidade atual pode ser preservado usando sinais relativos/ordinais em vez das probabilidades cruas?**
 
@@ -1419,9 +1812,11 @@ A prioridade imediata é **provar se o `risk_rank` aumenta de fato a taxa real d
 
 > **A métrica decisiva é a qualidade da aposta completa para atingir pelo menos 13 acertos, validada fora da amostra.**
 
-> **`P13+` estimado pelo próprio modelo não substitui hit_rate_13plus real em walk-forward.**
+> **`P13+` estimado pelo próprio modelo não substitui `hit_rate_13plus` real em walk-forward.**
 
 > **Melhorar log-loss é útil, mas não substitui melhora real de 13+.**
+
+> **Uma intervenção histórica que não muda o bilhete não pode melhorar os acertos reais daquele concurso; por isso impacto decisório deve ser auditado separadamente da calibração.**
 
 > **Valorizar o histórico só é melhoria se aumentar ou preservar o desempenho real de 13+ em walk-forward.**
 
