@@ -2,7 +2,7 @@ import unittest
 
 from scripts.common import rank_results, rank_scale, top1_risk_scale
 from scripts.predict_results import hit_distribution, optimize, validate_ticket
-from scripts.train_model import _risk_rank_analysis, _validated_temperature
+from scripts.train_model import _risk_rank_analysis, _tail_metrics, _validated_temperature
 
 
 class PipelineTests(unittest.TestCase):
@@ -51,6 +51,19 @@ class PipelineTests(unittest.TestCase):
         self.assertGreaterEqual(audit[0]["ic95_hit_high"], audit[0]["Top1_hit_observado"])
         self.assertIn("50", audit[0]["window_hit_rates"])
         self.assertIn(audit[0]["confidence_label"], ("LOW", "MEDIUM", "HIGH"))
+
+    def test_tail_metrics_use_paired_net13_migrations(self):
+        metrics = _tail_metrics([12, 13, 14, 11], [13, 12, 14, 13])
+        self.assertEqual(metrics["base_13plus"], 2)
+        self.assertEqual(metrics["challenger_13plus"], 3)
+        self.assertEqual(metrics["crossed_to_13plus"], 2)
+        self.assertEqual(metrics["fell_below_13"], 1)
+        self.assertEqual(metrics["net13_gain"], 1)
+        self.assertEqual(metrics["transitions"]["12->13"], 1)
+
+    def test_tail_metrics_reject_unpaired_results(self):
+        with self.assertRaisesRegex(ValueError, "mesmo tamanho"):
+            _tail_metrics([12], [])
 
     def test_optimizer_enforces_all_hard_constraints(self):
         rows = []
