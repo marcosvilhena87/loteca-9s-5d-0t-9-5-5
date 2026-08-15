@@ -34,7 +34,7 @@ top3_hit
 
 Em cada partida, exatamente uma dessas variáveis deve ser igual a `1`.
 
-6. Exibir telemetria suficiente para auditar probabilidades, ranking, secos, duplos, restrições, cutoff, robustez, consenso entre seletores e critérios da aposta final.
+6. Exibir telemetria suficiente para auditar probabilidades, ranking, secos, duplos, restrições, cutoff, robustez, consenso entre seletores, evidência histórica e critérios da aposta final.
 
 ---
 
@@ -142,11 +142,11 @@ Portanto:
 
 ---
 
-## Histórico vs. próximo concurso
+# Histórico vs. próximo concurso
 
-A decisão deve combinar duas fontes complementares.
+O projeto deve tratar o histórico como **segunda fonte explícita de decisão**, e não apenas como material usado para treinar probabilidades.
 
-### Histórico
+## Histórico
 
 Em `data/concursos_anteriores.csv`, estudar:
 
@@ -164,11 +164,14 @@ incluindo:
 - transições Top1/Top2/Top3;
 - comportamento por posição;
 - comportamento por tipo de ranking;
-- calibração histórica dos ranks;
+- comportamento por `risk_rank` dentro do concurso;
 - padrões dos concursos que produziram 13+;
-- padrões de falha do Top1.
+- padrões dos concursos `RECOVERABLE`;
+- padrões de falha do Top1;
+- comportamento específico da zona de cutoff;
+- estabilidade das evidências em diferentes janelas temporais.
 
-### Próximo concurso
+## Próximo concurso
 
 Para cada partida de `data/proximo_concurso.csv`, produzir:
 
@@ -177,7 +180,474 @@ p(1), p(X), p(2)
 p(top1), p(top2), p(top3)
 ```
 
-As probabilidades podem ser usadas em diferentes níveis de intensidade. O projeto deve testar se a magnitude exata das probabilidades realmente melhora `>=13` em relação a estratégias que utilizam apenas ranking, faixas, estrutura e histórico.
+As probabilidades podem ser usadas em diferentes níveis de intensidade. O projeto deve testar se a magnitude exata das probabilidades realmente melhora `>=13` em relação a estratégias que utilizam ranking, faixas, estrutura, histórico e consenso.
+
+---
+
+# Valorizar concursos anteriores
+
+A estratégia deve testar formalmente se os concursos anteriores conseguem melhorar a escolha dos 5 duplos, principalmente quando as probabilidades atuais são pouco conclusivas.
+
+Princípio preferencial:
+
+```text
+presente define o contexto
+histórico resolve a dúvida
+```
+
+O histórico não deve substituir cegamente as probabilidades. Ele deve ganhar influência especialmente na **zona cinzenta**, no cutoff e nos casos em que diferentes sinais atuais discordam.
+
+## HistoricalScore por jogo
+
+Criar um score histórico independente das probabilidades atuais.
+
+Exemplo conceitual:
+
+```text
+HistoricalScore =
+    w1 * historical_risk_rank
+  + w2 * historical_ranking_type
+  + w3 * historical_position
+  + w4 * historical_knn_game
+  + w5 * historical_regime
+  + w6 * historical_recency
+```
+
+Preferir componentes transformados em ranks, percentis ou scores normalizados.
+
+Nenhum peso deve ser escolhido olhando o concurso alvo. Pesos só podem ser definidos por validação walk-forward.
+
+---
+
+## Histórico específico do cutoff 5º/6º
+
+Para cada concurso histórico, armazenar:
+
+```text
+candidate_rank5
+candidate_rank6
+pTop1_rank5
+pTop1_rank6
+margin_56
+top1_hit_rank5
+top1_hit_rank6
+cutoff_winner
+```
+
+Calcular estatísticas condicionais como:
+
+```text
+P(rank6 melhor que rank5 | margin_56 < 0.01)
+P(rank6 melhor que rank5 | 0.01 <= margin_56 < 0.02)
+P(rank6 melhor que rank5 | margin_56 >= 0.02)
+```
+
+O objetivo é aprender quando a ordem probabilística entre 5º e 6º é pouco confiável.
+
+---
+
+## Histórico do `risk_rank` 1..14
+
+Ordenar os jogos de cada concurso histórico pelo risco de falha do Top1 e guardar a posição relativa:
+
+```text
+risk_rank = 1..14
+```
+
+Medir:
+
+```text
+P(top1_fail | risk_rank=1)
+P(top1_fail | risk_rank=2)
+...
+P(top1_fail | risk_rank=14)
+```
+
+Esse sinal é especialmente importante por depender mais da **posição relativa** que da magnitude exata de `p(top1)`.
+
+---
+
+## Histórico por tipo de ranking
+
+Existem seis ordenações possíveis:
+
+```text
+1 > X > 2
+1 > 2 > X
+X > 1 > 2
+X > 2 > 1
+2 > 1 > X
+2 > X > 1
+```
+
+Para cada tipo, medir:
+
+```text
+Top1 hit rate
+Top2 hit rate
+Top3 hit rate
+Top1 fail rate
+```
+
+Também testar cruzamentos com:
+
+```text
+risk_rank
+classe de equilíbrio
+posição
+gap12 por faixa
+entropia por faixa
+```
+
+---
+
+## Histórico específico do empate
+
+Separar o comportamento de:
+
+```text
+X como Top1
+X como Top2
+X como Top3
+```
+
+Medir taxas reais de ocorrência e estabilidade temporal.
+
+Esse diagnóstico é relevante porque muitos duplos da estrutura atual contêm empate (`1X` ou `X2`).
+
+---
+
+## KNN histórico por jogo
+
+Para cada jogo atual, buscar jogos históricos semelhantes usando preferencialmente variáveis estruturais:
+
+```text
+tipo_de_ranking
+risk_rank
+pTop1_percentile
+gap12_percentile
+gap13_percentile
+entropy_percentile
+posição
+```
+
+Em vez de obrigatoriamente converter o resultado em uma nova probabilidade absoluta, o KNN pode gerar um voto auditável:
+
+```text
+20 vizinhos
+12 Top1_fail
+8 Top1_hit
+HistoricalVoteKNN = 12/20
+```
+
+Registrar também o número efetivo de vizinhos e a distância média para evitar confiança excessiva em vizinhanças ruins.
+
+---
+
+## KNN histórico por concurso
+
+Representar cada concurso por uma assinatura global, por exemplo:
+
+```text
+mean_pTop1
+median_pTop1
+mean_entropy
+mean_gap12
+n_top1_home
+n_top1_draw
+n_top1_away
+n_jogos_equilibrados
+n_favoritos_fortes
+quantidade de cada tipo de ranking
+```
+
+Buscar concursos históricos semelhantes ao atual e analisar:
+
+```text
+quantidade de Top1_fail
+posição das falhas
+distribuição por risk_rank
+estrutura das runs
+falhas próximas ao cutoff
+```
+
+O KNN de concurso deve ser comparado com o KNN por jogo; ambos podem votar separadamente no `HistoricalVote`.
+
+---
+
+## Recência ponderada
+
+O histórico deve ser analisado em múltiplas janelas, por exemplo:
+
+```text
+últimos 50 concursos
+últimos 100 concursos
+últimos 200 concursos
+histórico completo
+```
+
+Opcionalmente testar pesos de recência, por exemplo:
+
+```text
+0-50      -> 1.00
+51-150    -> 0.70
+151-300   -> 0.40
+mais antigo -> 0.20
+```
+
+Os pesos são hipóteses e só podem ser promovidos se melhorarem resultados fora da amostra.
+
+---
+
+## HistoricalStability
+
+Criar uma medida de estabilidade do sinal histórico entre janelas temporais.
+
+Exemplo conceitual:
+
+```text
+Top1_fail do perfil:
+últimos 50   = 0.58
+últimos 100  = 0.56
+histórico    = 0.55
+```
+
+Sinal estável.
+
+Exemplo instável:
+
+```text
+últimos 50   = 0.44
+últimos 100  = 0.62
+histórico    = 0.51
+```
+
+O peso histórico deve cair quando a dispersão entre janelas for elevada.
+
+Definição possível:
+
+```text
+HistoricalStability = 1 - dispersão_normalizada_das_janelas
+```
+
+A fórmula final deve ser validada em walk-forward.
+
+---
+
+## Peso histórico adaptativo
+
+O histórico não precisa ter peso fixo.
+
+Regra experimental conceitual:
+
+```text
+fronteira probabilística larga  -> peso histórico baixo
+fronteira intermediária         -> peso histórico moderado
+fronteira estreita               -> peso histórico maior
+```
+
+Exemplo inicial:
+
+```text
+margin_56 > 0.03          -> hist_weight = 0.10
+0.01 < margin_56 <= 0.03  -> hist_weight = 0.30
+margin_56 <= 0.01         -> hist_weight = 0.50
+```
+
+Esses valores são apenas challengers experimentais.
+
+O peso histórico efetivo também pode ser multiplicado por `HistoricalStability`, reduzindo automaticamente a influência de sinais históricos instáveis.
+
+---
+
+## HistoricalVote
+
+Criar votos independentes a partir de diferentes fontes históricas:
+
+```text
+H1 = histórico do risk_rank
+H2 = histórico do tipo de ranking
+H3 = histórico da posição
+H4 = KNN por jogo
+H5 = KNN por concurso
+H6 = recência / estabilidade
+H7 = pattern matching
+H8 = histórico de RECOVERABLE / 12->13
+```
+
+Exemplo:
+
+```text
+J6: 6 votos históricos
+J3: 4 votos históricos
+J8: 2 votos históricos
+```
+
+O voto histórico deve ficar separado do voto probabilístico na telemetria para permitir auditoria.
+
+---
+
+## Histórico como desempate
+
+Filosofia preferencial para a primeira versão:
+
+```text
+probabilidade / estrutura -> define núcleo
+histórico                 -> resolve zona cinzenta
+```
+
+Exemplo conceitual:
+
+```text
+Núcleo de duplos: J1 J13 J14 J4
+Zona cinzenta:    J6 J3 J8
+```
+
+O histórico decide a vaga restante sem precisar reavaliar decisões muito robustas em todo o volante.
+
+---
+
+## Pattern matching de falhas
+
+Representar cada concurso histórico como sequência:
+
+```text
+F A A F A F ...
+```
+
+onde:
+
+```text
+F = top1_fail
+A = top1_hit
+```
+
+Estudar:
+
+```text
+quantidade de falhas
+posição da primeira falha
+posição da última falha
+runs de acertos
+runs de falhas
+distância entre falhas
+concentração das falhas
+```
+
+Também agrupar concursos em templates como:
+
+```text
+falhas concentradas no início
+falhas concentradas no meio
+falhas tardias
+falhas dispersas
+muitas falhas
+poucas falhas
+```
+
+O próximo concurso pode ser comparado com esses templates usando somente informações disponíveis antes do resultado.
+
+---
+
+## Prior histórico para quantidade de falhas
+
+Estimar historicamente:
+
+```text
+P(n_top1_fail = k)
+```
+
+A estratégia pode ser dividida em duas etapas:
+
+```text
+1. estimar quantas falhas de Top1 são plausíveis
+2. estimar onde as falhas são mais prováveis
+```
+
+Esse prior é diagnóstico e não deve forçar uma quantidade fixa de falhas.
+
+---
+
+## Valorizar concursos `RECOVERABLE`
+
+O `oracle_9_5_5` deve permitir separar:
+
+```text
+SUCCESS
+RECOVERABLE
+UNRECOVERABLE
+```
+
+O desenvolvimento do seletor deve dar atenção especial aos concursos `RECOVERABLE`, pois são os casos em que 13+ era estruturalmente possível, mas a estratégia falhou na escolha das marcações.
+
+Criar relatórios específicos para esse subconjunto:
+
+```text
+risk_rank dos duplos corretos
+cutoff correto vs escolhido
+tipo de ranking dos erros
+diferença de HistoricalScore
+diferença de consenso
+quantidade mínima de trocas
+```
+
+---
+
+## Dataset específico 12 -> 13
+
+Criar um dataset dedicado aos concursos em que:
+
+```text
+acertos_modelo = 12
+acertos_oracle >= 13
+```
+
+Para cada caso, registrar:
+
+```text
+duplo que deveria sair
+seco que deveria entrar
+risk_rank de ambos
+margin do cutoff
+tipo de ranking
+gap12 / entropia por faixa
+HistoricalScore
+HistoricalVote
+KNN vote
+regime do concurso
+```
+
+Esse dataset pode alimentar um modelo pairwise especializado na recuperação de 12 para 13.
+
+---
+
+## Modelo pairwise histórico da zona cinzenta
+
+Para dois candidatos próximos, treinar a pergunta:
+
+```text
+qual dos dois merece maior prioridade para Top2+Top3?
+```
+
+Exemplo:
+
+```text
+J6 vs J3
+```
+
+O modelo pode usar diferenças ordinais entre:
+
+```text
+risk_rank
+gap_rank
+entropy_rank
+HistoricalScore
+HistoricalVote
+KNN vote
+regime
+```
+
+Preferir esse modelo apenas na zona cinzenta.
 
 ---
 
@@ -185,26 +655,13 @@ As probabilidades podem ser usadas em diferentes níveis de intensidade. O proje
 
 Uma linha prioritária de pesquisa é tornar a decisão dos 5 duplos **menos dependente de pequenas diferenças numéricas** entre probabilidades estimadas.
 
-Exemplo do problema:
-
-```text
-p(top1) jogo A = 0.4473
-p(top1) jogo B = 0.4571
-```
-
-Uma diferença inferior a 1 ponto percentual não deve, por si só, dominar a decisão se outros sinais estruturais e históricos indicarem comportamento diferente.
-
 O objetivo não é eliminar as probabilidades, mas reduzir a dependência de sua magnitude exata quando a evidência é fraca.
 
 ## Modos experimentais de seleção
 
-O projeto deve suportar pelo menos três modos comparáveis em walk-forward.
-
 ### `PROBABILITY_ONLY`
 
-Usa as probabilidades contínuas completas como principal sinal de decisão.
-
-Baseline natural:
+Usa as probabilidades contínuas completas como principal sinal.
 
 ```text
 score_duplo = 1 - p(top1)
@@ -222,20 +679,20 @@ Top3
 
 Depois disso, as magnitudes são descartadas.
 
-A decisão pode usar:
+Pode usar:
 
-- posição da partida;
-- tipo de ranking `1/X/2`;
+- posição;
+- tipo de ranking;
 - frequência histórica de `top1_hit`;
-- runs e fragmentação;
-- padrões históricos de Top1/Top2/Top3;
-- regime estrutural do concurso.
+- runs;
+- regime estrutural;
+- `HistoricalVote`.
 
 ### `HYBRID_ORDINAL`
 
 Modo preferencial de pesquisa.
 
-Usa as probabilidades para formar rankings e classes, mas evita depender diretamente de diferenças pequenas entre valores contínuos.
+Usa probabilidades para formar rankings e classes, mas evita depender diretamente de diferenças pequenas entre valores contínuos.
 
 Pode usar:
 
@@ -245,9 +702,10 @@ rank_gap12
 rank_gap13
 rank_entropy
 rank_historical_fail
+HistoricalScore
+HistoricalStability
+HistoricalVote
 ```
-
-O objetivo é combinar posição relativa, incerteza e histórico.
 
 ---
 
@@ -262,15 +720,15 @@ gap13 = p(top1) - p(top3)
 entropy = entropia de p(1), p(X), p(2)
 ```
 
-Essas variáveis descrevem a **geometria da incerteza**.
-
 Dois jogos com `p(top1)` semelhante podem ter riscos diferentes se um possuir Top1 muito próximo do Top2 e outro apresentar separação maior.
 
 ---
 
-## Dependência por faixas, não por valores exatos
+## Dependência por faixas e percentis
 
-Também deve ser testada discretização das probabilidades em classes, por exemplo:
+Testar discretização das probabilidades em classes e quantis históricos.
+
+Exemplo inicial:
 
 ```text
 p(top1) < 0.40       -> muito equilibrado
@@ -280,171 +738,78 @@ p(top1) < 0.40       -> muito equilibrado
 p(top1) >= 0.65      -> favorito extremo
 ```
 
-Os limites acima são apenas hipóteses iniciais e devem ser ajustados exclusivamente com dados de treinamento.
-
-A finalidade é fazer com que jogos muito próximos numericamente sejam tratados como pertencentes ao mesmo regime e sejam diferenciados por histórico e estrutura.
-
----
-
-## Tipos de ranking 1/X/2
-
-Existem seis ordenações possíveis:
+Também criar:
 
 ```text
-1 > X > 2
-1 > 2 > X
-X > 1 > 2
-X > 2 > 1
-2 > 1 > X
-2 > X > 1
+percentil_pTop1
+percentil_gap12
+percentil_entropy
 ```
 
-Para cada tipo, medir historicamente:
-
-```text
-Top1 hit rate
-Top2 hit rate
-Top3 hit rate
-Top1 fail rate
-```
-
-Isso permite aprender padrões que dependem da **ordenação dos resultados**, sem depender necessariamente das magnitudes exatas das probabilidades.
-
----
-
-## Modelo de posição
-
-Como baseline adicional, medir:
-
-```text
-P(top1_hit | posição do jogo)
-```
-
-para posições 1 a 14.
-
-Essa feature não deve ser assumida como causal, mas pode servir como sinal estrutural ou baseline para verificar se existem efeitos históricos persistentes por posição.
-
----
-
-## Padrões de sequência e runs
-
-Representar concursos históricos como sequências de ranks reais:
-
-```text
-T1 T1 T2 T1 T3 T1 T1 T2 T1 T1 T3 T2 T1 T1
-```
-
-Estudar:
-
-```text
-quantidade de Top1
-quantidade de falhas de Top1
-max_run_top1
-numero_de_runs_top1
-fragmentação
-posição da primeira falha
-posição da última falha
-distância entre falhas
-```
-
-O objetivo é verificar se existem estruturas associadas a maior recuperação de 13+ sob as Hard Constraints.
-
----
-
-## Número esperado de falhas do Top1
-
-Testar uma modelagem em duas etapas:
-
-```text
-1. estimar quantas falhas de Top1 esperar no concurso
-2. estimar onde essas falhas tendem a ocorrer
-```
-
-Isso pode ser mais robusto do que tomar 14 decisões independentes baseadas apenas nas probabilidades individuais.
+Os limites devem ser definidos exclusivamente com dados disponíveis no treino.
 
 ---
 
 ## Consenso entre seletores
 
-Implementar seletores independentes, por exemplo:
+Implementar seletores independentes:
 
 ```text
 A = 5 menores p(top1)
 B = 5 menores gap12
 C = 5 maiores entropias
-D = 5 maiores taxas históricas de Top1_fail
-E = seletor ordinal / rank-only
-F = meta-modelo
+D = HistoricalVote
+E = RANK_ONLY
+F = HYBRID_ORDINAL
+G = meta-modelo da zona cinzenta
 ```
 
-Cada jogo recebe votos conforme a quantidade de métodos que o selecionam para duplo.
+Cada jogo recebe votos conforme a quantidade de métodos que o selecionam.
 
-Exemplo:
+Manter separados:
 
 ```text
-Jogo | Prob | Gap12 | Entropia | Histórico | RankOnly | Votos
-1    |   X  |   X   |    X     |     X     |    X     | 5
-13   |   X  |   X   |    X     |     -     |    X     | 4
-...
+CurrentEvidenceVotes
+HistoricalVotes
+TotalConsensusVotes
 ```
-
-Os pesos de cada seletor, caso utilizados, devem ser definidos exclusivamente em validação walk-forward.
 
 ---
 
 ## Núcleo robusto e zona cinzenta
 
-A partir do consenso, classificar os jogos em três grupos.
-
-### Núcleo de duplos
-
-Jogos em que múltiplos métodos concordam que o Top1 é vulnerável.
-
-### Zona cinzenta
-
-Jogos próximos ao cutoff ou com forte discordância entre métodos.
-
-Exemplo conceitual:
+Classificar os jogos em:
 
 ```text
-Núcleo de duplos: J1 J13 J14 J4
-Zona cinzenta:    J6 J3 J8
-Núcleo de secos:  demais jogos
+núcleo_duplo
+zona_cinzenta
+núcleo_seco
 ```
 
-O modelo histórico deve concentrar maior capacidade decisória na zona cinzenta, em vez de tentar substituir sinais muito fortes em todos os 14 jogos.
+O modelo histórico deve concentrar maior capacidade decisória na zona cinzenta.
 
 ---
 
 ## Historical Pattern Matching
 
-Para cada concurso histórico, guardar a estrutura de ranking das 14 partidas, por exemplo:
+Guardar para cada concurso histórico:
 
 ```text
-1>X>2
-2>X>1
-1>2>X
-...
+estrutura de ranking das 14 partidas
+sequência real T1/T2/T3
+assinatura global do concurso
 ```
 
-junto com a sequência real:
+Comparar o próximo concurso com concursos históricos semelhantes e estimar onde o Top1 historicamente falhou.
 
-```text
-T1 T2 T1 T3 ...
-```
+Testar:
 
-Para o próximo concurso, comparar sua estrutura de rankings com concursos históricos semelhantes e estimar onde o Top1 historicamente falhou.
-
-Esse método deve ser testado tanto:
-
-- sem magnitudes probabilísticas;
-- quanto em versão híbrida usando apenas faixas de confiança.
+- versão sem magnitudes probabilísticas;
+- versão híbrida usando apenas faixas/percentis.
 
 ---
 
 ## Score ordinal
-
-Testar um score baseado em posições relativas, em vez de magnitudes diretas.
 
 Exemplo conceitual:
 
@@ -454,9 +819,8 @@ ScoreOrdinal =
   + w2 * rank_gap12
   + w3 * rank_entropy
   + w4 * rank_historical_fail
+  + w5 * rank_HistoricalVote
 ```
-
-A direção dos ranks deve ser normalizada para que score maior sempre represente maior prioridade para receber duplo.
 
 Os pesos devem ser escolhidos apenas em validação walk-forward.
 
@@ -464,54 +828,36 @@ Os pesos devem ser escolhidos apenas em validação walk-forward.
 
 ## Agreement@5
 
-Medir a concordância entre seletores.
-
-Exemplo:
-
 ```text
-Agreement@5(PROBABILITY_ONLY, RANK_ONLY)
-= número de jogos em comum entre os dois Top-5 / 5
+Agreement@5(A, B) = jogos em comum entre os dois Top-5 / 5
 ```
 
-Interpretar:
+Usar para comparar:
 
 ```text
-100% -> seleção praticamente estrutural
-80%  -> forte concordância
-60%  -> zona relevante de divergência
-40% ou menos -> forte dependência do método
+PROBABILITY_ONLY vs RANK_ONLY
+PROBABILITY_ONLY vs HYBRID_ORDINAL
+PROBABILITY_ONLY vs HISTORICAL_ONLY
+HISTORICAL_ONLY vs HYBRID_ORDINAL
 ```
-
-Os limites são apenas descritivos; não devem ser usados como Hard Constraints.
 
 ---
 
 ## Rank Preservation Stress Test
 
-Testar a dependência da aposta às magnitudes preservando a ordem Top1/Top2/Top3.
-
-Procedimento:
-
-1. manter o ranking dos três resultados de cada partida;
-2. comprimir ou expandir artificialmente as diferenças probabilísticas;
+1. manter o ranking Top1/Top2/Top3;
+2. comprimir/expandir diferenças probabilísticas;
 3. renormalizar;
 4. rerodar o seletor;
-5. medir quantos dos 5 duplos permanecem.
+5. medir `Agreement@5` e `Stability@5`.
 
-Exemplo:
-
-```text
-original:   0.4473 / 0.3098 / 0.2429
-comprimido: 0.4000 / 0.3300 / 0.2700
-```
-
-Se o ranking permanece igual, mas a seleção dos duplos muda excessivamente, isso indica dependência elevada da magnitude probabilística.
+Se o ranking permanece, mas a seleção muda excessivamente, existe dependência alta da magnitude probabilística.
 
 ---
 
 ## Temperature Stress Test
 
-Como diagnóstico, recalcular probabilidades sob diferentes temperaturas, por exemplo:
+Como diagnóstico, testar temperaturas como:
 
 ```text
 T = 0.70
@@ -524,36 +870,19 @@ T = 1.50
 Medir:
 
 ```text
-Agreement@5 entre temperaturas
+Agreement@5
 Stability@5
-mudança no núcleo de duplos
+mudança no núcleo
 mudança na zona cinzenta
 ```
 
-O teste é diagnóstico e não deve alterar automaticamente a temperatura implantada.
+O teste não deve alterar automaticamente a temperatura implantada.
 
 ---
 
-## Métrica de dependência probabilística
+# Fronteira dos duplos
 
-Criar uma telemetria agregada para medir quanto o seletor depende das magnitudes contínuas.
-
-Sinais possíveis:
-
-```text
-Agreement@5(PROBABILITY_ONLY, RANK_ONLY)
-Agreement@5(PROBABILITY_ONLY, HYBRID_ORDINAL)
-Stability@5 no Rank Preservation Stress Test
-Stability@5 no Temperature Stress Test
-```
-
-Uma estratégia menos dependente das probabilidades deve preservar desempenho em `>=13` enquanto apresenta maior estabilidade quando as magnitudes são perturbadas sem alteração relevante do ranking.
-
----
-
-## Fronteira dos duplos
-
-O terminal deve ordenar os 14 jogos pelo risco de falha do Top1 e destacar a fronteira entre o 5º e o 6º candidato.
+Ordenar os 14 jogos pelo risco de falha do Top1 e destacar o 5º e 6º candidatos.
 
 Calcular:
 
@@ -563,12 +892,16 @@ P13+ após trocar o 5º pelo 6º
 Delta absoluto
 Delta relativo
 Margem pTop1
+HistoricalScore dos dois
+HistoricalVote dos dois
+HistoricalStability dos dois
 ```
 
 Separar sempre:
 
 ```text
 Fronteira probabilística
+Evidência histórica
 Robustez no objetivo
 ```
 
@@ -576,9 +909,9 @@ Uma margem pequena em `p(top1)` não implica necessariamente impacto pequeno em 
 
 ---
 
-## Backtest da baseline
+# Backtest e diagnóstico estrutural
 
-Implementar explicitamente:
+## Baseline
 
 ```text
 9 maiores p(top1) -> Top1 seco
@@ -590,6 +923,7 @@ Comparar em walk-forward contra:
 ```text
 PROBABILITY_ONLY
 RANK_ONLY
+HISTORICAL_ONLY
 HYBRID_ORDINAL
 CONSENSUS
 otimizador completo
@@ -601,24 +935,24 @@ Métricas mínimas:
 14 acertos
 >=13 acertos
 >=12 acertos
-média de acertos
+média
 mediana
-distribuição de 0 a 14
 Precision@5
 Recall@5
 CoverageFail
 DoubleWasteRate
 Agreement@5
 Stability@5
+RecoveryRate
 ```
 
 ---
 
 ## Oracle histórico 9-5-5
 
-Implementar um `oracle_9_5_5` exclusivamente para diagnóstico retrospectivo.
+Implementar `oracle_9_5_5` exclusivamente para diagnóstico retrospectivo.
 
-O oracle pode usar o resultado real para encontrar a melhor aposta possível respeitando integralmente:
+O oracle pode usar o resultado real para encontrar a melhor aposta possível respeitando:
 
 ```text
 9 secos
@@ -693,21 +1027,10 @@ zero_regret_rate
 
 ## Métricas específicas dos duplos
 
-### Precision@5
-
 ```text
 Precision@5 = falhas de Top1 entre os 5 duplos / 5
-```
-
-### Recall@5 / CoverageFail
-
-```text
 Recall@5 = falhas de Top1 capturadas pelos duplos / falhas de Top1 totais
-```
-
-### DoubleWasteRate
-
-```text
+CoverageFail = Recall@5
 DoubleWasteRate = duplos em que Top1_hit=1 / 5
 ```
 
@@ -741,7 +1064,7 @@ erros_duplos_por_top1_hit
 
 ## Meta-modelo da zona cinzenta
 
-Priorizar um meta-modelo para candidatos próximos ao cutoff, por exemplo ranks 4 a 8 de risco.
+Priorizar candidatos próximos ao cutoff, por exemplo ranks 4 a 8.
 
 Alvo:
 
@@ -759,13 +1082,15 @@ rank_gap13
 rank_entropy
 tipo_ranking_1X2
 posição
-rank_no_concurso
+risk_rank
 distance_to_cutoff
-historical_fail_rate
-features de regime
+HistoricalScore
+HistoricalVote
+HistoricalStability
+KNN_game_vote
+KNN_contest_vote
+regime
 ```
-
-A versão menos dependente de probabilidades deve preferir features ordinais/categóricas quando seu desempenho fora da amostra for equivalente ou superior ao uso das magnitudes contínuas.
 
 ---
 
@@ -781,48 +1106,7 @@ Recall@5
 NDCG@5
 ```
 
-O modelo pode ser treinado com features contínuas, ordinais ou exclusivamente estruturais, permitindo comparação direta da dependência probabilística.
-
----
-
-## Calibração por rank
-
-Auditar:
-
-```text
-p(top1) previsto vs frequência real de top1_hit
-p(top2) previsto vs frequência real de top2_hit
-p(top3) previsto vs frequência real de top3_hit
-```
-
-Definição possível:
-
-```text
-HistoricalLiftTopK = frequencia_real_topK_hit / probabilidade_media_prevista_topK
-```
-
-O lift deve ser diagnóstico ou feature, nunca correção automática sem validação fora da amostra.
-
----
-
-## Regime do concurso
-
-Representar o concurso por características como:
-
-```text
-quantidade de Top1=1
-quantidade de Top1=X
-quantidade de Top1=2
-quantidade de cada um dos 6 tipos de ranking
-mean_top1
-median_top1
-mean_entropy
-mean_gap12
-n_favoritos_fortes
-n_jogos_equilibrados
-```
-
-As versões `RANK_ONLY` e `HYBRID_ORDINAL` devem priorizar as variáveis estruturais e categóricas desse vetor.
+Comparar features contínuas, ordinais e históricas.
 
 ---
 
@@ -831,10 +1115,10 @@ As versões `RANK_ONLY` e `HYBRID_ORDINAL` devem priorizar as variáveis estrutu
 Calcular o impacto de trocar cada duplo por cada seco compatível com as Hard Constraints.
 
 ```text
-Sai | Entra | Delta P13+
+Sai | Entra | Delta P13+ | Delta HistoricalScore | Delta Consensus
 ```
 
-Isso permite visualizar a geometria completa da solução e identificar a verdadeira zona cinzenta.
+Isso permite visualizar a geometria completa da solução.
 
 ---
 
@@ -842,13 +1126,11 @@ Isso permite visualizar a geometria completa da solução e identificar a verdad
 
 Perturbar probabilidades, renormalizar e rerodar o seletor.
 
-Reportar a frequência com que cada jogo permanece nos 5 duplos.
-
 ```text
 Stability@5 = média da persistência dos 5 duplos escolhidos
 ```
 
-A robustez deve ser analisada em conjunto com o desempenho de `>=13`: estabilidade sem desempenho não é objetivo suficiente.
+Robustez deve ser analisada junto com `>=13`.
 
 ---
 
@@ -872,26 +1154,28 @@ max E[P13+]
 
 ---
 
-## Walk-forward e prevenção de leakage
+# Walk-forward e prevenção de leakage
 
 Fluxo obrigatório:
 
 ```text
 treina até concurso N-1
 calibra usando apenas dados disponíveis até N-1
+calcula HistoricalScore usando apenas concursos <= N-1
+busca KNN usando apenas concursos <= N-1
 prevê concurso N
 monta a aposta de N
 avalia contra o resultado real de N
 avança para N+1
 ```
 
-Probabilidades in-sample não devem ser usadas como meta-features para `top1_hit`, `top2_hit`, `top3_hit` ou `top1_fail`.
+Probabilidades, estatísticas históricas, KNN, recência, templates, pesos e meta-features devem respeitar integralmente esse corte temporal.
 
 ---
 
 ## Validação por período
 
-Reportar resultados por janelas, por exemplo:
+Reportar resultados por janelas:
 
 ```text
 últimos 50 concursos
@@ -906,7 +1190,7 @@ Uma estratégia só deve ser considerada robusta se o ganho não depender de um 
 
 ## Bootstrap da taxa de 13+
 
-Como 13+ é raro, estimar a incerteza da taxa observada por bootstrap no nível de concurso.
+Como 13+ é raro, estimar a incerteza por bootstrap no nível de concurso.
 
 ```text
 hit_rate_13plus = ...
@@ -923,26 +1207,28 @@ Comparar progressivamente:
 A - baseline 5 menores p(top1)
 B - PROBABILITY_ONLY
 C - RANK_ONLY
-D - HYBRID_ORDINAL
-E - CONSENSUS
-F - + meta-modelo zona cinzenta
-G - + Historical Pattern Matching
-H - + regime de concurso
-I - + Soft Constraint Palmeiras
-J - modelo completo
+D - HISTORICAL_ONLY
+E - HYBRID_ORDINAL
+F - + HistoricalVote
+G - + KNN por jogo
+H - + KNN por concurso
+I - + HistoricalStability / recência
+J - + meta-modelo zona cinzenta
+K - + Historical Pattern Matching
+L - + regime de concurso
+M - + Soft Constraint Palmeiras
+N - modelo completo
 ```
 
-Relatório:
+Relatório mínimo:
 
 ```text
-Modelo | 14 | >=13 | >=12 | Média | Precision@5 | Recall@5 | Agreement@5 | Stability@5
+Modelo | 14 | >=13 | >=12 | Média | RecoveryRate | Precision@5 | Recall@5 | Agreement@5 | Stability@5
 ```
-
-Uma feature ou heurística só deve permanecer se demonstrar contribuição fora da amostra.
 
 ---
 
-## Champion / Challenger
+# Champion / Challenger
 
 Manter:
 
@@ -951,15 +1237,18 @@ Champion = estratégia atualmente aprovada
 Challenger = nova implementação em avaliação
 ```
 
+Exemplos de Challengers:
+
+```text
+HISTORICAL_ONLY
+HYBRID_ORDINAL
+HYBRID_HISTORY_ADAPTIVE
+PAIRWISE_GRAY_ZONE
+KNN_HISTORY
+CONSENSUS_HISTORY
+```
+
 O Challenger só deve ser promovido se superar o Champion em walk-forward.
-
-Para estratégias menos dependentes de probabilidades, a promoção deve considerar simultaneamente:
-
-1. desempenho de `>=13`;
-2. desempenho de `>=12`;
-3. estabilidade por período;
-4. robustez a perturbações;
-5. dependência probabilística menor, **desde que não haja perda material no objetivo principal**.
 
 ---
 
@@ -992,11 +1281,12 @@ Critérios:
 - ausência de deterioração material em `>=12`;
 - estabilidade em diferentes períodos;
 - resultado não dependente de poucos concursos extremos;
-- intervalo de confiança compatível com ganho plausível.
+- intervalo de confiança compatível com ganho plausível;
+- nenhum uso indireto do resultado futuro em estatísticas históricas.
 
 ---
 
-## Função objetivo
+# Função objetivo
 
 O objetivo principal permanece:
 
@@ -1016,13 +1306,13 @@ P(>=12)
 
 Sob a hipótese de independência entre jogos, a distribuição de acertos pode ser calculada exatamente por programação dinâmica / Poisson-binomial.
 
-A estratégia menos dependente das probabilidades **não altera a Hard Constraint nem o objetivo final**. Ela altera apenas a forma de escolher entre soluções viáveis.
+O histórico pode alterar a **ordenação/prioridade das soluções**, mas nenhuma abordagem histórica deve ser promovida apenas por parecer intuitiva.
 
 ---
 
-## Telemetria esperada
+# Telemetria esperada
 
-### Por partida
+## Por partida
 
 ```text
 Jogo
@@ -1037,10 +1327,17 @@ gap12
 gap13
 entropy
 classe de confiança
+risk_rank
 rank_pTop1
 rank_gap12
 rank_entropy
-votos dos seletores
+HistoricalScore
+HistoricalVote
+HistoricalStability
+KNN_game_vote
+KNN_contest_vote
+CurrentEvidenceVotes
+TotalConsensusVotes
 grupo: núcleo_duplo / zona_cinzenta / núcleo_seco
 tipo: seco ou duplo
 palpite
@@ -1048,10 +1345,24 @@ cobertura
 motivo da escolha
 ```
 
-### Consenso dos seletores
+## Evidência histórica
 
 ```text
-Jogo | Prob | Gap12 | Entropia | Histórico | RankOnly | Votos
+Fonte histórica | Voto | Amostra | Taxa Top1_fail | Estabilidade
+risk_rank
+ranking_type
+position
+KNN_game
+KNN_contest
+recency
+pattern_match
+recoverable_12to13
+```
+
+## Consenso dos seletores
+
+```text
+Jogo | Prob | Gap12 | Entropia | Histórico | RankOnly | Hybrid | Votos
 ```
 
 Exibir:
@@ -1063,18 +1374,22 @@ Núcleo robusto dos secos
 Agreement@5
 ```
 
-### Fronteira
+## Fronteira
 
 ```text
 5º candidato
 6º candidato
 margem pTop1
 delta P13+
+HistoricalScore 5º/6º
+HistoricalVote 5º/6º
+HistoricalStability 5º/6º
 fronteira probabilística
+evidência histórica
 robustez no objetivo
 ```
 
-### Validação final
+## Validação final
 
 ```text
 Secos: 9/9
@@ -1108,7 +1423,7 @@ A preferência só deve prevalecer quando o custo for aceitável dentro da estra
 
 ---
 
-## Estrutura do repositório
+# Estrutura do repositório
 
 ```text
 .
@@ -1130,8 +1445,8 @@ A preferência só deve prevalecer quando o custo for aceitável dentro da estra
 - `data/concursos_anteriores.csv`: histórico de treinamento, calibração e backtest.
 - `data/proximo_concurso.csv`: concurso alvo.
 - `scripts/preprocess_data.py`: leitura, validação e engenharia de features.
-- `scripts/train_model.py`: treinamento, calibração, meta-modelos e avaliação walk-forward.
-- `scripts/predict_results.py`: probabilidades, ranking, seletores, otimização 9-5-5 e palpite final.
+- `scripts/train_model.py`: treinamento, calibração, meta-modelos, histórico e avaliação walk-forward.
+- `scripts/predict_results.py`: probabilidades, ranking, seletores, evidência histórica, otimização 9-5-5 e palpite final.
 - `output/predictions.csv`: saída auditável.
 
 ---
@@ -1197,43 +1512,55 @@ python -m unittest discover -v
 
 ---
 
-## Ordem recomendada de implementação
+# Ordem recomendada de implementação
 
 ```text
-1. modos PROBABILITY_ONLY / RANK_ONLY / HYBRID_ORDINAL
-2. consenso dos seletores + votação
-3. núcleo de duplos / zona cinzenta / núcleo de secos
-4. Agreement@5
-5. Rank Preservation Stress Test
-6. Temperature Stress Test
-7. backtest comparativo dos modos
-8. oracle_9_5_5
-9. SUCCESS / RECOVERABLE / UNRECOVERABLE
-10. análise 12 -> 13
-11. Precision@5 / Recall@5 / CoverageFail / DoubleWasteRate
-12. meta-modelo da zona cinzenta
-13. Historical Pattern Matching
-14. matriz de trocas
-15. Stability@5
-16. bootstrap de >=13
-17. Champion / Challenger
-18. learning to rank
-19. Monte Carlo robusto
-20. ablation study contínuo
+1. histórico do cutoff 5º/6º
+2. histórico do risk_rank 1..14
+3. histórico dos 6 tipos de ranking
+4. HistoricalVote
+5. KNN histórico por jogo
+6. KNN histórico por concurso
+7. HistoricalStability por janelas
+8. peso histórico adaptativo
+9. análise específica de RECOVERABLE
+10. dataset 12 -> 13
+11. pairwise histórico da zona cinzenta
+12. Historical Pattern Matching
+13. modos PROBABILITY_ONLY / RANK_ONLY / HISTORICAL_ONLY / HYBRID_ORDINAL
+14. consenso dos seletores
+15. núcleo / zona cinzenta / núcleo seco
+16. Agreement@5
+17. Rank Preservation Stress Test
+18. backtest comparativo dos modos
+19. oracle_9_5_5
+20. Precision@5 / Recall@5 / CoverageFail / DoubleWasteRate
+21. meta-modelo da zona cinzenta
+22. matriz de trocas
+23. Stability@5
+24. bootstrap de >=13
+25. Champion / Challenger
+26. learning to rank
+27. Monte Carlo robusto
+28. ablation study contínuo
 ```
 
-A pergunta experimental central passa a ter duas partes:
+As perguntas experimentais centrais são:
 
 > **O esquema 9-5-5 está estruturalmente limitando o desempenho, ou o sistema ainda está escolhendo os cinco duplos errados?**
 
-> **Quanto da qualidade atual vem realmente da magnitude das probabilidades, e quanto pode ser preservado ou melhorado usando ranking, histórico, estrutura e consenso?**
+> **Quanto da qualidade atual vem da magnitude das probabilidades, e quanto pode ser preservado ou melhorado usando ranking, histórico, estrutura e consenso?**
+
+> **Os concursos anteriores conseguem resolver melhor a zona cinzenta e recuperar casos de 12 para 13 sem provocar overfitting?**
 
 ---
 
-## Regra fundamental
+# Regra fundamental
 
 > **As Hard Constraints têm precedência absoluta sobre qualquer Soft Constraint, heurística ou preferência.**
 
 > **A métrica decisiva do projeto é a qualidade da aposta completa para atingir pelo menos 13 acertos, validada fora da amostra.**
+
+> **Valorizar o histórico só é melhoria se aumentar ou preservar o desempenho real de 13+ em walk-forward.**
 
 > **Reduzir dependência das probabilidades só é melhoria se preservar ou aumentar o desempenho real de 13+.**
