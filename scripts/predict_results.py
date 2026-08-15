@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import csv
 import json
+import math
 from dataclasses import dataclass
 from pathlib import Path
 
@@ -41,6 +42,32 @@ def hit_distribution(coverages: list[float]) -> list[float]:
 
 def _ticket_distribution(predictions: list[dict]) -> list[float]:
     return hit_distribution([game["probabilidade_coberta"] for game in predictions])
+
+
+def validate_ticket(predictions: list[dict]) -> None:
+    """Independently reject an optimized ticket that violates a hard constraint."""
+    if len(predictions) != 14:
+        raise ValueError(f"A aposta deve ter 14 jogos; recebeu {len(predictions)}")
+    dry = sum(game["tipo"] == "seco" for game in predictions)
+    doubles = sum(game["tipo"] == "duplo" for game in predictions)
+    triples = sum(len(game["palpite"]) == 3 for game in predictions)
+    rank_counts = [
+        sum(f"top{rank}" in game["ranks_selecionados"].split("+") for game in predictions)
+        for rank in range(1, 4)
+    ]
+    markings = sum(len(game["palpite"]) for game in predictions)
+    if (dry, doubles, triples, *rank_counts, markings) != (9, 5, 0, 9, 5, 5, 19):
+        raise ValueError(
+            "Hard Constraints violadas: "
+            f"secos={dry}, duplos={doubles}, triplos={triples}, "
+            f"Top1/2/3={rank_counts}, marcações={markings}"
+        )
+    for game in predictions:
+        home, away = normalized_team(game["Mandante"]), normalized_team(game["Visitante"])
+        if "FLAMENGO/RJ" in (home, away):
+            victory = "1" if home == "FLAMENGO/RJ" else "2"
+            if victory not in game["palpite"]:
+                raise ValueError(f"Vitória do Flamengo ausente no jogo {game['Jogo']}")
 
 
 def _pareto(candidates: list[Candidate]) -> list[Candidate]:
@@ -114,10 +141,14 @@ def optimize(rows: list[dict[str, str]], temperature: float) -> tuple[list[dict]
             "p(1)": probs["1"], "p(X)": probs["X"], "p(2)": probs["2"],
             "top1": ranking[0], "top2": ranking[1], "top3": ranking[2],
             "p(top1)": probs[ranking[0]], "p(top2)": probs[ranking[1]], "p(top3)": probs[ranking[2]],
+            "gap12": probs[ranking[0]] - probs[ranking[1]],
+            "gap13": probs[ranking[0]] - probs[ranking[2]],
+            "entropy": -sum(probability * math.log(probability) for probability in probs.values()),
             "tipo": "duplo" if len(choice) == 2 else "seco", "palpite": ordered_marks,
             "ranks_selecionados": "+".join(f"top{index + 1}" for index in choice),
             "probabilidade_coberta": sum(probs[result] for result in selected),
         })
+    validate_ticket(output)
     return output, best.success
 
 
@@ -139,6 +170,7 @@ def print_telemetry(predictions: list[dict], success: float) -> None:
         print(f"Jogo {game['Jogo']:>2} | {game['Mandante']} x {game['Visitante']}")
         print(f"  p(1)={game['p(1)']:.4f} p(X)={game['p(X)']:.4f} p(2)={game['p(2)']:.4f}")
         print(f"  ranking: {game['top1']} ({game['p(top1)']:.4f}) > {game['top2']} ({game['p(top2)']:.4f}) > {game['top3']} ({game['p(top3)']:.4f})")
+        print(f"  gap12={game['gap12']:.4f} gap13={game['gap13']:.4f} entropia={game['entropy']:.4f}")
         print(f"  {game['tipo']}: {game['palpite']} [{game['ranks_selecionados']}] cobertura={game['probabilidade_coberta']:.4f}")
     dry = sum(game["tipo"] == "seco" for game in predictions)
     doubles = sum(game["tipo"] == "duplo" for game in predictions)
@@ -148,6 +180,7 @@ def print_telemetry(predictions: list[dict], success: float) -> None:
     print("\n=== VALIDAÇÃO DAS HARD CONSTRAINTS ===")
     print(f"Secos: {dry}/9 | Duplos: {doubles}/5 | Triplos: 0/0")
     print(f"Top1: {rank_counts[0]}/9 | Top2: {rank_counts[1]}/5 | Top3: {rank_counts[2]}/5")
+    print(f"Total de marcações: {sum(len(game['palpite']) for game in predictions)}/19")
     print(f"Flamengo/RJ: {'regra satisfeita' if flamengo_ok else 'REGRA VIOLADA'}")
     distribution = _ticket_distribution(predictions)
     exact_success = distribution[13] + distribution[14]
@@ -190,8 +223,12 @@ def _print_double_cutoff(predictions: list[dict], original_success: float) -> No
     swapped = sum(hit_distribution(swapped_coverages)[13:])
     delta = swapped - original_success
     relative = delta / original_success if original_success else 0.0
-    fragile = abs(relative) <= 0.05
+    margin = abs(sixth["p(top1)"] - fifth["p(top1)"])
+    narrow = margin <= 0.01
+    material = abs(relative) > 0.01
     print(f"P13+ original: {original_success:.8%}")
     print(f"P13+ após trocar o 5º pelo 6º: {swapped:.8%}")
     print(f"Delta absoluto: {delta:+.8%} | Delta relativo: {relative:+.4%}")
-    print(f"Diagnóstico: {'FRÁGIL / QUASE EMPATE' if fragile else 'decisão robusta pelo critério de 5%'}")
+    print(f"Margem pTop1: {margin:.4f}")
+    print(f"Fronteira probabilística: {'ESTREITA' if narrow else 'AMPLA'}")
+    print(f"Robustez no objetivo: {'MATERIAL' if material else 'IMATERIAL'}")
