@@ -22,6 +22,27 @@ class Candidate:
         return self.p0 + self.p1
 
 
+def hit_distribution(coverages: list[float]) -> list[float]:
+    """Return exact probabilities for 0..N correct games.
+
+    Each game's ``coverage`` is the probability that its selected mark (or one
+    of its two marks) is correct.  The convolution avoids Monte Carlo noise and
+    makes the optimized objective independently auditable.
+    """
+    distribution = [1.0]
+    for coverage in coverages:
+        updated = [0.0] * (len(distribution) + 1)
+        for hits, probability in enumerate(distribution):
+            updated[hits] += probability * (1.0 - coverage)
+            updated[hits + 1] += probability * coverage
+        distribution = updated
+    return distribution
+
+
+def _ticket_distribution(predictions: list[dict]) -> list[float]:
+    return hit_distribution([game["probabilidade_coberta"] for game in predictions])
+
+
 def _pareto(candidates: list[Candidate]) -> list[Candidate]:
     """Keep only (P(no miss), P(one miss)) non-dominated partial tickets."""
     ordered = sorted(candidates, key=lambda item: (-item.p0, -item.p1))
@@ -128,4 +149,49 @@ def print_telemetry(predictions: list[dict], success: float) -> None:
     print(f"Secos: {dry}/9 | Duplos: {doubles}/5 | Triplos: 0/0")
     print(f"Top1: {rank_counts[0]}/9 | Top2: {rank_counts[1]}/5 | Top3: {rank_counts[2]}/5")
     print(f"Flamengo/RJ: {'regra satisfeita' if flamengo_ok else 'REGRA VIOLADA'}")
-    print(f"Objetivo otimizado P(acertos >= 13): {success:.8%}")
+    distribution = _ticket_distribution(predictions)
+    exact_success = distribution[13] + distribution[14]
+    print("\n=== DECOMPOSIÇÃO DO OBJETIVO ===")
+    print(f"P(14): {distribution[14]:.8%}")
+    print(f"P(13): {distribution[13]:.8%}")
+    print(f"P(>=13): {exact_success:.8%}")
+    print(f"P(12): {distribution[12]:.8%}")
+    print(f"P(>=12): {sum(distribution[12:]):.8%}")
+    print(f"Auditoria DP vs otimizador: diferença={abs(exact_success - success):.3e}")
+    _print_double_cutoff(predictions, exact_success)
+
+
+def _print_double_cutoff(predictions: list[dict], original_success: float) -> None:
+    """Audit the fifth/sixth Top1-risk boundary and its concrete P13+ cost."""
+    ordered = sorted(predictions, key=lambda game: (-1.0 + game["p(top1)"], int(game["Jogo"])))
+    print("\n=== FRONTEIRA DO 5º VS 6º CANDIDATO A DUPLO ===")
+    print("Rank | Jogo | pTop1 | 1-pTop1 | Decisão")
+    for rank, game in enumerate(ordered, 1):
+        separator = "  <--- cutoff" if rank in (5, 6) else ""
+        print(f"{rank:>4} | {int(game['Jogo']):>4} | {game['p(top1)']:.4f} | {1-game['p(top1)']:.4f} | {game['tipo'].upper()}{separator}")
+
+    fifth, sixth = ordered[4], ordered[5]
+    exchangeable = (
+        fifth["ranks_selecionados"] == "top2+top3"
+        and sixth["ranks_selecionados"] == "top1"
+    )
+    if not exchangeable:
+        print("Troca direta não aplicável: as decisões globais no cutoff não são Top2+Top3 e Top1.")
+        return
+
+    swapped_coverages = []
+    for game in predictions:
+        if game is fifth:
+            swapped_coverages.append(game["p(top1)"])
+        elif game is sixth:
+            swapped_coverages.append(game["p(top2)"] + game["p(top3)"])
+        else:
+            swapped_coverages.append(game["probabilidade_coberta"])
+    swapped = sum(hit_distribution(swapped_coverages)[13:])
+    delta = swapped - original_success
+    relative = delta / original_success if original_success else 0.0
+    fragile = abs(relative) <= 0.05
+    print(f"P13+ original: {original_success:.8%}")
+    print(f"P13+ após trocar o 5º pelo 6º: {swapped:.8%}")
+    print(f"Delta absoluto: {delta:+.8%} | Delta relativo: {relative:+.4%}")
+    print(f"Diagnóstico: {'FRÁGIL / QUASE EMPATE' if fragile else 'decisão robusta pelo critério de 5%'}")
