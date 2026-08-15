@@ -1,9 +1,13 @@
 {
   "type": "temperature_scaling",
   "temperature": 0.88,
+  "calibration_promoted": true,
+  "validation_candidate_temperature": 0.88,
+  "validation_selected_temperature": 0.88,
   "training_games": 5012,
   "validation_games": 1260,
   "training_last_contest": 1175,
   "validation_log_loss_raw": 0.9684647682506566,
-  "validation_log_loss_calibrated": 0.9666445646082557
+  "validation_log_loss_calibrated": 0.9666445646082557,
+  "deployment_log_loss_all_history": 0.9846092072913122
 }
