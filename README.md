@@ -48,10 +48,31 @@ As restrições abaixo são obrigatórias e não podem ser violadas pela geraç�
    - **5 duplos**;
    - **0 triplos**.
 
-2. Gerar exatamente:
-   - **9 top1**;
-   - **5 top2**;
-   - **5 top3**.
+2. Gerar exatamente **19 marcações**, distribuídas obrigatoriamente em:
+   - **9 resultados Top1**;
+   - **5 resultados Top2**;
+   - **5 resultados Top3**.
+
+   Essa distribuição **9-5-5 não deve ser aplicada de forma cega ou puramente posicional**. A escolha de quais jogos receberão marcações Top1, Top2 e Top3 deve resultar da comparação entre:
+
+   - o **histórico dos concursos anteriores** de `data/concursos_anteriores.csv`, incluindo a frequência, posição, sequência, concentração e demais padrões observados de `top1_hit`, `top2_hit` e `top3_hit`;
+   - as **probabilidades do próximo concurso** de `data/proximo_concurso.csv`, especialmente `p(top1)`, `p(top2)` e `p(top3)` de cada uma das 14 partidas.
+
+   O histórico deve orientar **como distribuir estruturalmente os ranks Top1/Top2/Top3**, enquanto as probabilidades do próximo concurso determinam **qual resultado concreto (`1`, `X` ou `2`) ocupa cada rank em cada partida**.
+
+   A solução final deve, entre todas as combinações que respeitem exatamente `9 Top1 + 5 Top2 + 5 Top3`, escolher a distribuição que maximize o objetivo global:
+
+   ```text
+   P(acertos >= 13)
+   ```
+
+   Como existem 9 secos e 5 duplos:
+
+   ```text
+   9 × 1 + 5 × 2 = 19 marcações
+   ```
+
+   Portanto, a contagem `9 Top1 + 5 Top2 + 5 Top3 = 19` refere-se às **19 marcações efetivamente presentes no palpite final**, e não ao número de partidas.
 
 3. Quando o **FLAMENGO/RJ** participar do concurso, incluir obrigatoriamente entre as marcações o resultado correspondente à sua **vitória**.
 
@@ -217,6 +238,67 @@ top3_hit = 0
 
 ---
 
+## Histórico vs. próximo concurso
+
+A seleção das 19 marcações deve combinar duas fontes de informação complementares.
+
+### 1. Histórico dos concursos anteriores
+
+Em `data/concursos_anteriores.csv`, após calcular o ranking probabilístico de cada partida e confrontá-lo com o resultado real, o sistema deve estudar a distribuição de:
+
+```text
+top1_hit
+top2_hit
+top3_hit
+```
+
+A análise histórica pode considerar, entre outros sinais:
+
+- frequência global e recente de cada rank;
+- distribuição por posição do jogo no concurso;
+- quantidade de Top1 por concurso;
+- runs consecutivas de Top1;
+- fragmentação das ocorrências de Top1;
+- transições entre Top1, Top2 e Top3;
+- padrões condicionais em função das próprias probabilidades;
+- comportamento histórico de partidas com perfis probabilísticos semelhantes aos do próximo concurso.
+
+### 2. Probabilidades do próximo concurso
+
+Para cada uma das 14 partidas de `data/proximo_concurso.csv`, devem ser obtidos:
+
+```text
+p(top1)
+p(top2)
+p(top3)
+```
+
+Essas probabilidades fornecem o custo e o benefício probabilístico de incluir cada rank na aposta.
+
+### 3. Otimização conjunta
+
+O otimizador deve confrontar os padrões aprendidos no histórico com as probabilidades atuais e decidir em quais partidas utilizar cada uma das 19 marcações, sujeito simultaneamente a:
+
+```text
+9 secos
+5 duplos
+0 triplos
+
+9 Top1
+5 Top2
+5 Top3
+```
+
+Uma distribuição historicamente frequente não deve ser escolhida apenas por sua frequência se ela for incompatível com as probabilidades do concurso atual. Da mesma forma, a maior probabilidade individual de uma partida não deve, isoladamente, ignorar padrões históricos relevantes.
+
+O critério decisivo continua sendo a qualidade da **aposta completa**, medida prioritariamente por:
+
+```text
+P(acertos >= 13)
+```
+
+---
+
 ## Princípio de otimização
 
 O objetivo do projeto **não é simplesmente maximizar a acurácia média das previsões individuais**.
@@ -250,6 +332,17 @@ motivo da escolha
 restrições relevantes
 ```
 
+A telemetria da otimização 9-5-5 também deve mostrar, quando aplicável:
+
+```text
+score histórico da distribuição candidata
+score probabilístico do próximo concurso
+quantidade de Top1/Top2/Top3 selecionados
+posições das marcações Top1/Top2/Top3
+ganho marginal de cada duplo
+impacto estimado sobre P(acertos >= 13)
+```
+
 Ao final, deve ser exibido um resumo validando as Hard Constraints, incluindo:
 
 ```text
@@ -259,6 +352,7 @@ Triplos: 0/0
 Top1: 9/9
 Top2: 5/5
 Top3: 5/5
+Total de marcações: 19/19
 Flamengo/RJ: regra satisfeita, quando aplicável
 ```
 
